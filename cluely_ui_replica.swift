@@ -667,8 +667,9 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
         elapsedTime = 0
         updateTimerDisplay()
         
-        // Clear any previous screen text
+        // Clear any previous screen text to prevent OCR/audio cross-contamination
         lastScreenText = ""
+        print("🧹 Cleared screen OCR text to prevent mixing with audio questions")
         
         // FIXED: If was listening, restart immediately instead of stopping
         if wasListening {
@@ -699,8 +700,68 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
     }
     
     @objc private func moreOptionsClicked() {
-        print("⋯ More Options clicked")
-        showAlert("More Options", "This would show additional Cluely features")
+        print("⋯ More Options clicked - showing menu")
+        showMoreOptionsMenu()
+    }
+    
+    private func showMoreOptionsMenu() {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        
+        // Add quit option
+        let quitItem = NSMenuItem(title: "🚪 Quit App", action: #selector(quitAppClicked), keyEquivalent: "")
+        quitItem.target = self
+        quitItem.isEnabled = true
+        menu.addItem(quitItem)
+        
+        // Add separator
+        menu.addItem(NSMenuItem.separator())
+        
+        // Add other options (placeholder for future features)
+        let aboutItem = NSMenuItem(title: "ℹ️ About", action: #selector(aboutClicked), keyEquivalent: "")
+        aboutItem.target = self
+        aboutItem.isEnabled = true
+        menu.addItem(aboutItem)
+        
+        // Find the more options button to position the menu
+        if let containerView = window.contentView {
+            for subview in containerView.subviews {
+                if let button = subview as? NSButton, button.title == "⋯" {
+                    // Show menu at button location
+                    let buttonFrame = button.frame
+                    let menuLocation = NSPoint(x: buttonFrame.midX, y: buttonFrame.minY)
+                    menu.popUp(positioning: nil, at: menuLocation, in: containerView)
+                    break
+                }
+            }
+        }
+    }
+    
+    @objc private func quitAppClicked() {
+        print("🚪 Quit app clicked - terminating application")
+        
+        // Clean up before quitting
+        timer?.invalidate()
+        
+        // Clean up global event monitor
+        if let monitor = globalEventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        
+        // Close any websocket connections
+        electronWebSocket?.cancel(with: .goingAway, reason: nil)
+        
+        // Terminate the application
+        NSApp.terminate(nil)
+    }
+    
+    @objc private func aboutClicked() {
+        let alert = NSAlert()
+        alert.messageText = "About Cluely"
+        alert.informativeText = "Cluely Interview Assistant\nVersion 1.0\n\nFeatures:\n• Real-time screen analysis\n• AI-powered responses\n• Interview coaching\n• Screenshot hiding\n\nHotkeys:\n• Cmd+Shift+\\ - Show/Hide\n• Cmd+Enter - AI Analysis\n• Cmd+Arrow Keys - Move window"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
     
     private func showAlert(_ title: String, _ message: String) {
@@ -825,12 +886,27 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
         }
         
         let prompt = """
-        You are an AI assistant helping with interview questions. Based on the screen content below, provide a helpful, concise response.
+        You are an expert programming and interview assistant. Based on the screen content below, provide comprehensive technical analysis with proper code formatting:
         
         Screen Content:
         \(screenText)
         
-        Provide a brief, helpful response (max 3 sentences):
+        Provide structured analysis in this format:
+        
+        **Analysis**: [Explain what the code/content is doing in 1-2 sentences]
+        
+        **Key Concepts**: [Important technical concepts or patterns shown]
+        
+        **Code Example** (if applicable): 
+        ```language
+        [Provide clean, properly formatted code that demonstrates the concept or solves the problem]
+        ```
+        
+        **Improvements/Tips**: [Suggestions for optimization, best practices, or interview talking points]
+        
+        **Interview Focus**: [What an interviewer might ask about this code/topic]
+        
+        Use proper markdown formatting for code blocks. Keep response comprehensive but under 150 words total.
         """
         
         do {
@@ -1433,10 +1509,23 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
     
     private func handleTranscription(_ text: String) {
         print("📝 Transcription received: \(text)")
-        lastTranscribedText = text
+        
+        // Filter out empty, very short, or meaningless transcriptions
+        let cleanedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Check if transcription is meaningful enough for analysis
+        guard !cleanedText.isEmpty,
+              cleanedText.count >= 10, // Minimum 10 characters
+              !isCommonNoisePhrase(cleanedText),
+              isInterviewRelevant(cleanedText) else {
+            print("🚫 Skipping analysis - transcription not interview-relevant: '\(cleanedText)'")
+            return
+        }
+        
+        lastTranscribedText = cleanedText
         
         // Add to conversation history
-        conversationHistory.append(text)
+        conversationHistory.append(cleanedText)
         
         // Keep only last 10 exchanges
         if conversationHistory.count > 10 {
@@ -1447,16 +1536,74 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
         if interviewMode && isListening {
             print("🎓 [INTERVIEW MODE] Analyzing transcription for coaching...")
             Task {
-                await analyzeTranscriptionWithGPT4o(transcription: text)
+                await analyzeTranscriptionWithGPT4o(transcription: cleanedText)
             }
         } else {
             print("🔇 [PASSIVE] Transcription logged but no coaching (interview mode: \(interviewMode), listening: \(isListening))")
         }
     }
     
+    // Helper function to filter out common noise phrases
+    private func isCommonNoisePhrase(_ text: String) -> Bool {
+        let lowercased = text.lowercased()
+        let commonNoises = [
+            "uh", "um", "ah", "er", "hmm", "mhm", "yeah", "ok", "okay", 
+            "...", "huh", "what", "test", "testing", "hello", "hi",
+            "can you hear me", "is this working", "microphone test",
+            "thanks for watching", "thank you for watching", "bye", "goodbye",
+            "peace", "see you later", "until next time", "that's all",
+            "subscribe", "like and subscribe", "follow me", "check out",
+            "visit", "website", "channel", "video", "tutorial"
+        ]
+        
+        // Check commercial/advertising content that shouldn't trigger coaching
+        let commercialPhrases = [
+            "beadaholique", "for all of your", "supply needs", "visit our website",
+            "check out our", "available at", "shop now", "buy now", "order today",
+            "special offer", "discount", "sale", "promotion", "deal"
+        ]
+        
+        // Check if the entire transcription is just a common noise phrase
+        for noise in commonNoises {
+            if lowercased == noise || lowercased.replacingOccurrences(of: " ", with: "") == noise.replacingOccurrences(of: " ", with: "") {
+                return true
+            }
+        }
+        
+        // Check for commercial/advertising content
+        for phrase in commercialPhrases {
+            if lowercased.contains(phrase) {
+                print("🚫 Blocking commercial content: '\(text)'")
+                return true
+            }
+        }
+        
+        // Block very short responses
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).count < 15 {
+            return true
+        }
+        
+        // Block repetitive content (same word repeated)
+        let words = lowercased.components(separatedBy: .whitespaces)
+        let uniqueWords = Set(words)
+        if words.count > 2 && uniqueWords.count < words.count / 2 {
+            print("🚫 Blocking repetitive content: '\(text)'")
+            return true
+        }
+        
+        return false
+    }
+    
     // NEW: Real-time transcription analysis (same as screen analysis)
     private func analyzeTranscriptionWithGPT4o(transcription: String) async {
         guard !isProcessingAI else { return }
+        
+        // Double-check transcription is meaningful before expensive AI analysis
+        let cleanedTranscription = transcription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleanedTranscription.count >= 10, !isCommonNoisePhrase(cleanedTranscription) else {
+            print("🚫 Skipping AI analysis - transcription still too short after filtering: '\(cleanedTranscription)'")
+            return
+        }
         
         // Check if task was cancelled before starting
         guard !Task.isCancelled else { 
@@ -1479,7 +1626,7 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
         
         // FIXED: Interview-focused prompt with proper code formatting
         var prompt = """
-        You are an expert interview coach. The candidate just said: "\(transcription)"
+        You are an expert interview coach. The candidate just said: "\(cleanedTranscription)"
         
         Provide specific interview coaching advice with proper code formatting:
         
@@ -1497,15 +1644,9 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
         Keep response under 100 words total. Use proper markdown formatting for code blocks.
         """
         
-        // Add screen context if available for technical questions
-        if !lastScreenText.isEmpty && lastScreenText.count > minTextLength {
-            prompt += """
-            
-            Screen shows: \(lastScreenText.prefix(150))...
-            
-            Use this context to give relevant technical interview advice.
-            """
-        }
+        // REMOVED: Automatic screen context inclusion that was causing OCR text to repeat
+        // Audio transcription should be analyzed independently from screen OCR
+        // Only the user's spoken words should be considered for coaching advice
         
         do {
             // Check cancellation before API call
@@ -1559,6 +1700,10 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
             showAlert("Connection Error", "Please make sure the Electron Audio Companion is running:\ncd electron-audio-companion && npm start")
             return
         }
+        
+        // Clear screen text to prevent OCR contamination in audio analysis
+        lastScreenText = ""
+        print("🧹 Cleared screen OCR text for clean audio analysis")
         
         // Enable interview mode
         interviewMode = true
@@ -1621,6 +1766,45 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
                 }
             }
         }
+    }
+    
+    // Helper function to check if transcription is interview-relevant
+    private func isInterviewRelevant(_ text: String) -> Bool {
+        let lowercased = text.lowercased()
+        
+        // Interview-related keywords
+        let interviewKeywords = [
+            "experience", "project", "challenge", "team", "work", "role", "skill",
+            "algorithm", "code", "programming", "software", "technical", "system",
+            "problem", "solution", "design", "implement", "develop", "build",
+            "java", "python", "swift", "javascript", "react", "node", "database",
+            "api", "backend", "frontend", "framework", "library", "architecture",
+            "performance", "optimization", "testing", "debugging", "deployment",
+            "agile", "scrum", "git", "version", "control", "review", "collaboration",
+            "leadership", "management", "responsibility", "achievement", "goal",
+            "learn", "improve", "grow", "mentor", "teach", "communicate",
+            "tell me about", "describe", "explain", "how would you", "what is",
+            "why did you", "can you walk me through", "give me an example"
+        ]
+        
+        // Check for interview-related content
+        for keyword in interviewKeywords {
+            if lowercased.contains(keyword) {
+                return true
+            }
+        }
+        
+        // Check if it's a question (often interview questions)
+        if lowercased.contains("?") || 
+           lowercased.hasPrefix("what") || lowercased.hasPrefix("how") || 
+           lowercased.hasPrefix("why") || lowercased.hasPrefix("tell me") ||
+           lowercased.hasPrefix("describe") || lowercased.hasPrefix("explain") {
+            return true
+        }
+        
+        // If none of the above, it's probably not interview-relevant
+        print("🚫 Not interview-relevant: '\(text)'")
+        return false
     }
 }
 

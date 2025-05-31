@@ -1,64 +1,108 @@
-# 🎯 Cluely Interview Assistant
+# 🎯 Cluely Interview Assistant - My Recreation   (Hopefully this makes me cracked enough for that internship)
 
-A real-time AI interview coaching system that provides instant feedback and coding help during technical interviews.
+Hey Cluely team,
 
-## ✨ Features
+I built this as my own take on your interview assistant concept. Figured the best way to understand how it works was to recreate it from scratch using Swift and Electron. Knocked this out in 12 hours to show what I can build and how I approach reverse-engineering existing products.
 
-- **🎤 Real-time Voice Analysis**: Continuous audio transcription and AI coaching
-- **⚡ Instant Screen Analysis**: Press Cmd+Enter to get AI help on anything on screen
-- **🤖 GPT-4o Integration**: Intelligent responses with proper code formatting
-- **👁 Screenshot Hiding**: Invisible to screen capture (like original Cluely)
-- **⌨️ Global Hotkeys**: Control from anywhere on your system
-- **📱 Modern UI**: Floating interface that works across all applications
-- **🔄 Dynamic Resizing**: Text containers adapt to content length
-- **📋 Easy Copy**: One-click copying of AI responses
+## ✨ What I Built
+
+- **🎤 Real-time Voice Analysis**: Audio transcription with AI coaching feedback
+- **⚡ Instant Screen Analysis**: Press Cmd+Enter for AI help on screen content
+- **🤖 GPT-4o Integration**: Smart responses with code formatting
+- **🔒 Screenshot Hiding**: The invisible-to-screen-capture feature
+- **⌨️ Global Hotkeys**: System-wide controls
+- **📱 Modern UI**: Floating interface that works across all apps
+
+
+## 🔒 Screenshot Hiding Implementation
+
+### How I Built It
+
+The core feature is making the window invisible to screen capture while keeping it visible to the user. Pretty straightforward implementation:
+
+```swift
+window.sharingType = .none  // Excludes window from screen capture APIs
+```
+
+**What this does:**
+- Invisible to screenshot tools and screen recordings
+- Works with video calls (Zoom, Teams, etc.)
+- User sees it normally, capture software doesn't
+- No setup required
+
+### Technical Details
+
+**Automatic hiding:**
+- Uses macOS window sharing APIs
+- Excluded from all screen capture methods
+- Seamless integration with video conferencing
+
+**Manual controls:**
+- `Cmd+Shift+\` hotkey for manual hide/show
+- Transparency-based hiding
+- Process stays alive when hidden
+
+### Features Overview
+
+| Feature | What It Does | Status |
+|---------|--------------|---------|
+| Screenshot hiding | Invisible to capture | Always on |
+| Manual hiding | User toggle | On demand |
+| Cross-desktop | Works on all spaces | Always on |
+| Always on top | Floats above windows | Always on |
+| Clean design | Borderless interface | Always on |
+
+### Use Cases
+
+Built for:
+- Remote technical interviews
+- Coding assessments
+- Online coding challenges  
+- Screen sharing scenarios
+
+This was a fun technical challenge to figure out the window management and capture exclusion APIs.
 
 ## 🚀 Quick Start
 
-### Simple 4-Step Setup
+Want to try it out? Here's how to get it running:
 
-1. **📥 Download this project**
-   ```bash
-   git clone <repository-url>
-   cd Cluely-Interview-Assistant
-   ```
+### 1. Clone and Setup
+```bash
+git clone [this-repo]
+cd Cluely-Interview-Assistant
+```
 
-2. **📋 Install requirements** (see `requirements.txt` for details)
-   ```bash
-   # Install Node.js if needed (from https://nodejs.org or via Homebrew)
-   brew install node
-   
-   # Install project dependencies
-   cd electron-audio-companion
-   npm install
-   cd ..
-   
-   # Set up your OpenAI API key
-   cp .env.example .env
-   # Edit .env and add: OPENAI_API_KEY=your_key_here
-   ```
+### 2. Install Requirements
+```bash
+# Install Node.js dependencies for audio capture
+cd electron-audio-companion
+npm install
+cd ..
 
-3. **🎧 Run the audio server**
-   ```bash
-   cd electron-audio-companion && npm start
-   ```
+# Set up your OpenAI API key
+cp .env.example .env
+# Edit .env and add: OPENAI_API_KEY=your_key_here
+```
 
-4. **🚀 Run the main app** (in a new terminal)
-   ```bash
-   swift cluely_ui_replica.swift
-   ```
+### 3. Start the Audio Server
+```bash
+cd electron-audio-companion
+npm start
+```
 
-**That's it!** Use `Cmd+Shift+\` to show/hide the interface.
+### 4. Run the Swift App (in a new terminal)
+```bash
+swift cluely_ui_replica.swift
+```
 
----
+That's it! Use `Cmd+Shift+\` to show/hide the interface.
 
-### Prerequisites
-
-- macOS (required for Swift and screen capture)
-- Node.js and npm
+**Prerequisites:**
+- macOS (for Swift and screen capture APIs)
+- Node.js
 - OpenAI API key
 
-## 🎮 Usage
+## 🎮 How to Use It
 
 ### Global Hotkeys
 - **Cmd+Shift+\\** - Show/hide interface
@@ -166,7 +210,3 @@ This project is for educational purposes. Please ensure compliance with intervie
 3. Make your changes
 4. Test thoroughly
 5. Submit a pull request
-
-## ⚠️ Disclaimer
-
-This tool is designed to assist with interview preparation and coding practice. Always follow your interview platform's terms of service and ethical guidelines. Use responsibly and transparently where appropriate. 
