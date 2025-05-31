@@ -286,6 +286,42 @@ class CluelyAudioCompanion {
             });
         });
 
+        // NEW: Handle real-time voice activity updates
+        ipcMain.on('voiceActivityUpdate', (event, activityData) => {
+            console.log(`🎤 [REAL-TIME] Voice activity: ${activityData.type}`);
+            
+            // Send real-time voice activity to Swift apps
+            this.connectedClients.forEach(ws => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'voiceActivity',
+                        activity: activityData.type,
+                        level: activityData.level,
+                        duration: activityData.duration,
+                        timestamp: activityData.timestamp
+                    }));
+                }
+            });
+        });
+
+        // NEW: Handle streaming transcription chunks
+        ipcMain.on('streamingTranscription', (event, streamData) => {
+            console.log(`🌊 [STREAMING] Partial transcription: "${streamData.text}"`);
+            
+            // Send streaming transcription to Swift apps
+            this.connectedClients.forEach(ws => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'streamingTranscription',
+                        text: streamData.text,
+                        partial: streamData.partial,
+                        context: streamData.context,
+                        timestamp: Date.now()
+                    }));
+                }
+            });
+        });
+
         // Handle interview coaching from renderer
         ipcMain.on('interviewCoaching', (event, coachingData) => {
             console.log('🎓 Interview Coaching:', coachingData.advice);

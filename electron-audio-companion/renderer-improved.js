@@ -8,14 +8,17 @@ class AudioCaptureManager {
         this.analyser = null;
         this.isRecording = false;
         this.recognition = null;
-        this.mediaRecorder = null;
-        this.audioChunks = [];
+        
+        // FIXED: Web Audio API approach instead of MediaRecorder
+        this.audioProcessor = null;
+        this.audioSource = null;
+        this.audioBuffer = [];
+        this.bufferChunks = [];
         
         // OpenAI Whisper API transcription
         this.openAIApiKey = null;
         this.whisperReady = false;
         this.processingWhisper = false;
-        this.audioBuffer = [];
         
         // GPT-4o Interview Coaching
         this.coachingEnabled = false;
@@ -23,43 +26,42 @@ class AudioCaptureManager {
         this.lastInterviewerQuestion = '';
         this.processingCoaching = false;
         
-        // IMPROVED: Faster speech detection with better thresholds
+        // REAL-TIME: Enhanced speech detection
         this.speechBuffer = [];
         this.isSpeaking = false;
         this.lastSpeechTime = 0;
         this.speechStartTime = 0;
-        this.silenceThreshold = 600; // FIXED: Shorter silence (0.6 seconds) for continuous conversation
-        this.minSpeechDuration = 400; // FIXED: Shorter minimum (0.4 second) for responsiveness
-        this.speechThreshold = 0.008; // FIXED: Lower threshold for better sensitivity
+        this.silenceThreshold = 800; // OPTIMIZED: 800ms silence detection (was 1200ms) - faster but still allows pauses
+        this.minSpeechDuration = 400; // OPTIMIZED: 400ms minimum speech (was 500ms)
+        this.speechThreshold = 0.005; // Sensitivity threshold
         
-        // IMPROVED: Audio capture mode with prioritized system audio
-        this.captureMode = 'system';
-        this.micStream = null;
-        this.systemStream = null;
+        // REAL-TIME: WAV encoding settings
+        this.sampleRate = 44100;
+        this.bufferSize = 4096; // 4KB chunks for responsiveness
+        this.chunkDuration = 3000; // OPTIMIZED: Send every 3 seconds for speed vs accuracy balance (was 8000)
+        this.lastChunkTime = 0;
         
-        // IMPROVED: Transcription queue for faster processing
+        // REAL-TIME: Transcription queue
         this.transcriptionQueue = [];
         this.isProcessingQueue = false;
         this.lastTranscriptionTime = 0;
-        this.minTranscriptionInterval = 300; // FASTER: Process transcriptions every 300ms
+        this.minTranscriptionInterval = 500; // Every 500ms
         
         // IMPROVED: Duplicate detection
         this.lastTranscriptions = [];
         this.maxTranscriptionHistory = 5;
         
-        // FIXED: Audio chunk buffering for continuous speech
-        this.pendingAudioChunks = [];
-        this.minAudioSizeForProcessing = 100000; // 100KB minimum for reliable processing
-        this.maxBufferWaitTime = 3000; // Maximum 3 seconds to wait for buffer
-        this.lastBufferFlushTime = 0;
+        // NEW: Real-time visual feedback
+        this.visualFeedbackEnabled = true;
+        this.currentVolumeLevel = 0;
+        this.voiceActivityIndicator = null;
         
         this.initializeUI();
         this.setupAudioCapture();
         this.setupOpenAIWhisper();
-        this.setupSpeechRecognition();
         this.setupIPC();
         this.startTranscriptionQueue();
-        this.startBufferProcessor(); // NEW: Start buffer management
+        this.initializeRealTimeFeatures();
     }
 
     initializeUI() {
@@ -81,14 +83,14 @@ class AudioCaptureManager {
 
     async setupAudioCapture() {
         try {
-            console.log('🎤 Setting up IMPROVED audio capture...');
+            console.log('🎤 Setting up REAL-TIME Web Audio API capture...');
             
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 throw new Error('getUserMedia not supported');
             }
 
-            this.updatePermissionStatus('🔑 IMPROVED Audio capture ready');
-            console.log('✅ IMPROVED Audio capture setup complete');
+            this.updatePermissionStatus('🔑 REAL-TIME Web Audio API ready');
+            console.log('✅ REAL-TIME Audio capture setup complete');
             
         } catch (error) {
             console.error('❌ Audio setup error:', error);
@@ -98,8 +100,8 @@ class AudioCaptureManager {
 
     async setupOpenAIWhisper() {
         try {
-            console.log('🤖 Initializing IMPROVED OpenAI Whisper API...');
-            this.updatePermissionStatus('🤖 Setting up IMPROVED OpenAI Whisper...');
+            console.log('🤖 Initializing REAL-TIME OpenAI Whisper API...');
+            this.updatePermissionStatus('🤖 Setting up REAL-TIME OpenAI Whisper...');
             
             this.openAIApiKey = config.OPENAI_API_KEY;
             
@@ -111,32 +113,23 @@ class AudioCaptureManager {
             
             this.whisperReady = true;
             this.coachingEnabled = config.COACHING_ENABLED;
-            console.log('✅ IMPROVED OpenAI Whisper API ready!');
-            console.log('🎓 IMPROVED GPT-4o Interview Coaching:', this.coachingEnabled ? 'ENABLED' : 'DISABLED');
+            console.log('✅ REAL-TIME OpenAI Whisper API ready!');
+            console.log('🎓 REAL-TIME GPT-4o Interview Coaching:', this.coachingEnabled ? 'ENABLED' : 'DISABLED');
             
             this.updateCapabilityStatus();
             
         } catch (error) {
             console.error('❌ OpenAI Whisper setup error:', error);
-            this.updatePermissionStatus('⚠️ OpenAI Whisper failed, using fallback');
+            this.updatePermissionStatus('⚠️ OpenAI Whisper failed');
             this.whisperReady = false;
-            this.enableFallbackSpeechDetection();
         }
     }
 
     updateCapabilityStatus() {
         const coachingStatus = this.coachingEnabled ? '+ FAST GPT-4o Coaching' : '';
-        this.updatePermissionStatus(`✅ IMPROVED Whisper ready - FASTER responses ${coachingStatus}`);
+        this.updatePermissionStatus(`✅ REAL-TIME WAV → Whisper ready ${coachingStatus}`);
     }
 
-    setupSpeechRecognition() {
-        // IMPROVED: Simpler, more reliable approach - focus on system audio + Whisper
-        console.log('🗣️ Setting up IMPROVED speech recognition (Whisper-focused)...');
-        this.speechRecognitionMethod = 'whisper-only';
-        console.log('✅ IMPROVED Speech recognition ready (Whisper-focused for reliability)');
-    }
-
-    // IMPROVED: Fast transcription queue processing
     startTranscriptionQueue() {
         setInterval(() => {
             if (this.transcriptionQueue.length > 0 && !this.isProcessingQueue) {
@@ -176,27 +169,27 @@ class AudioCaptureManager {
         if (this.isRecording) return;
 
         try {
-            console.log('🎤 Starting IMPROVED audio capture...');
+            console.log('🎤 Starting REAL-TIME Web Audio API capture...');
             this.isRecording = true;
             
-            // TRY: First attempt microphone capture directly (more reliable)
-            try {
-                console.log('🎙️ Attempting microphone capture...');
-                await this.startMicrophoneCapture();
-            } catch (micError) {
-                console.log('🎙️ Microphone failed, trying system audio...');
-                try {
-                    await this.startSystemAudioCapture();
-                } catch (systemError) {
-                    console.error('❌ Both microphone and system audio failed');
-                    throw new Error('No audio capture method available');
+            // Get microphone access with high-quality settings
+            this.mediaStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: this.sampleRate,
+                    channelCount: 1 // Mono for efficiency
                 }
-            }
+            });
+
+            console.log('✅ Microphone access granted!');
+            this.setupWebAudioAPI();
             
             this.updateUI();
             this.startVisualization();
             
-            console.log('✅ IMPROVED Audio capture started');
+            console.log('✅ REAL-TIME Web Audio API capture started');
             
         } catch (error) {
             console.error('❌ Failed to start audio capture:', error);
@@ -205,187 +198,316 @@ class AudioCaptureManager {
         }
     }
 
-    // NEW: Dedicated microphone capture method
-    async startMicrophoneCapture() {
+    setupWebAudioAPI() {
         try {
-            console.log('🎙️ Starting IMPROVED microphone capture...');
+            console.log('🔧 Setting up REAL-TIME Web Audio API processing...');
             
-            this.mediaStream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,  // Good for voice
-                    noiseSuppression: true,  // Reduce background noise
-                    autoGainControl: true,   // Normalize volume
-                    sampleRate: 44100,
-                    channelCount: 1 // Mono for smaller files
-                }
-            });
-
-            console.log('✅ IMPROVED Microphone capture granted!');
-            this.setupAudioProcessing();
-            
-        } catch (error) {
-            console.error('❌ Microphone capture failed:', error);
-            throw error;
-        }
-    }
-
-    async startSystemAudioCapture() {
-        try {
-            console.log('🖥️ Starting IMPROVED system audio capture...');
-            
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-                throw new Error('getDisplayMedia not supported');
-            }
-            
-            this.systemStream = await navigator.mediaDevices.getDisplayMedia({
-                video: {
-                    mediaSource: 'screen',
-                    width: { ideal: 1 },
-                    height: { ideal: 1 }
-                },
-                audio: {
-                    echoCancellation: false,
-                    noiseSuppression: false,
-                    autoGainControl: false,
-                    sampleRate: 44100, // IMPROVED: Better sample rate
-                    channelCount: 1 // IMPROVED: Mono for smaller files
-                }
-            });
-
-            console.log('✅ IMPROVED System audio capture granted!');
-            this.mediaStream = this.systemStream;
-            this.setupAudioProcessing();
-            
-        } catch (error) {
-            console.error('❌ System audio capture failed:', error);
-            throw error;
-        }
-    }
-
-    setupAudioProcessing() {
-        try {
-            console.log('🔧 Setting up IMPROVED audio processing...');
-            
+            // Create AudioContext with specified sample rate
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                sampleRate: 44100
+                sampleRate: this.sampleRate
             });
             
-            const source = this.audioContext.createMediaStreamSource(this.mediaStream);
-            this.analyser = this.audioContext.createAnalyser();
+            // Create source from microphone stream
+            this.audioSource = this.audioContext.createMediaStreamSource(this.mediaStream);
             
-            // IMPROVED: Better audio analysis settings
-            this.analyser.fftSize = 1024; // Smaller for faster processing
-            this.analyser.smoothingTimeConstant = 0.3; // More responsive
+            // Create analyser for visualization
+            this.analyser = this.audioContext.createAnalyser();
+            this.analyser.fftSize = 1024;
+            this.analyser.smoothingTimeConstant = 0.3;
             this.analyser.minDecibels = -90;
             this.analyser.maxDecibels = -10;
             
-            source.connect(this.analyser);
+            // FIXED: Use ScriptProcessorNode for real-time PCM capture
+            this.audioProcessor = this.audioContext.createScriptProcessor(
+                this.bufferSize, // Buffer size
+                1, // Input channels (mono)
+                1  // Output channels (mono)
+            );
             
-            this.setupMediaRecorder();
+            // Connect the audio pipeline
+            this.audioSource.connect(this.analyser);
+            this.audioSource.connect(this.audioProcessor);
+            this.audioProcessor.connect(this.audioContext.destination);
+            
+            // REAL-TIME: Process audio data as it comes in
+            this.audioProcessor.onaudioprocess = (event) => {
+                this.processAudioChunk(event);
+            };
+            
             this.startContinuousMonitoring();
             
-            console.log('✅ IMPROVED Audio processing setup complete');
+            console.log('✅ REAL-TIME Web Audio API processing setup complete');
             
         } catch (error) {
-            console.error('❌ Audio processing setup failed:', error);
+            console.error('❌ Web Audio API setup failed:', error);
             throw error;
         }
     }
 
-    setupMediaRecorder() {
-        try {
-            // FIXED: Use more compatible audio format for OpenAI
-            let options = {};
-            
-            // Try different formats in order of preference for OpenAI compatibility
-            const preferredFormats = [
-                'audio/webm;codecs=opus',
-                'audio/webm',
-                'audio/mp4',
-                'audio/ogg;codecs=opus'
-            ];
-            
-            let selectedFormat = null;
-            for (const format of preferredFormats) {
-                if (MediaRecorder.isTypeSupported(format)) {
-                    selectedFormat = format;
-                    options.mimeType = format;
-                    break;
-                }
-            }
-            
-            if (!selectedFormat) {
-                console.warn('⚠️ No preferred format supported, using default');
+    processAudioChunk(event) {
+        // Get PCM audio samples from the input buffer
+        const inputBuffer = event.inputBuffer;
+        const samples = inputBuffer.getChannelData(0); // Mono channel
+        
+        // FIXED: Calculate audio energy to detect actual speech
+        let energy = 0;
+        for (let i = 0; i < samples.length; i++) {
+            energy += samples[i] * samples[i];
+        }
+        energy = Math.sqrt(energy / samples.length);
+        
+        // FIXED: Only store chunks that have actual audio content
+        const hasSignificantAudio = energy > 0.001; // Minimum energy threshold
+        
+        if (hasSignificantAudio) {
+            this.bufferChunks.push(new Float32Array(samples));
+        }
+        
+        // FIXED: Only process if we have voice activity AND audio content
+        const currentTime = Date.now();
+        if (currentTime - this.lastChunkTime >= this.chunkDuration) {
+            // Only send if we have actual speech detected AND audio content
+            if (this.isSpeaking && this.bufferChunks.length > 0) {
+                this.processBufferedAudio();
             } else {
-                console.log(`🎵 Using audio format: ${selectedFormat}`);
+                // Clear empty buffers to prevent phantom transcriptions
+                this.bufferChunks = [];
+                console.log('🔇 [SILENCE] No speech detected - clearing buffer, not sending to OpenAI');
             }
-            
-            options.audioBitsPerSecond = 128000; // Higher quality for better OpenAI compatibility
-            
-            this.mediaRecorder = new MediaRecorder(this.mediaStream, options);
-            
-            this.mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    this.speechBuffer.push(event.data);
-                }
-            };
-            
-            this.mediaRecorder.start(250); // Slightly larger chunks for stability
-            console.log('✅ IMPROVED MediaRecorder started with compatible format');
-            
-        } catch (error) {
-            console.error('❌ MediaRecorder setup failed:', error);
-            // Fallback: try without any options
-            try {
-                this.mediaRecorder = new MediaRecorder(this.mediaStream);
-                this.mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) {
-                        this.speechBuffer.push(event.data);
-                    }
-                };
-                this.mediaRecorder.start(250);
-                console.log('✅ MediaRecorder started with default settings');
-            } catch (fallbackError) {
-                console.error('❌ MediaRecorder fallback failed:', fallbackError);
-                throw fallbackError;
-            }
+            this.lastChunkTime = currentTime;
         }
     }
 
+    async processBufferedAudio() {
+        if (this.bufferChunks.length === 0 || !this.whisperReady) return;
+        
+        try {
+            console.log(`🎵 [REAL-TIME] Converting ${this.bufferChunks.length} PCM chunks to WAV...`);
+            
+            // FIXED: Additional validation - check if the WAV has actual content
+            const wavBlob = this.convertPCMToWAV(this.bufferChunks, this.sampleRate);
+            
+            // Clear the buffer for next chunk
+            this.bufferChunks = [];
+            
+            if (wavBlob && wavBlob.size > 5000) { // INCREASED: Minimum 5KB for meaningful audio
+                // FIXED: Validate audio content before sending
+                if (await this.hasSignificantAudioContent(wavBlob)) {
+                    console.log(`🎤 [REAL-TIME] Sending ${Math.round(wavBlob.size/1024)}KB WAV chunk to OpenAI...`);
+                    this.transcriptionQueue.push(wavBlob);
+                } else {
+                    console.log(`🔇 [SILENT] Audio chunk has no significant content - skipping OpenAI call`);
+                }
+            } else {
+                console.log('🔇 [REAL-TIME] Audio chunk too small, skipping...');
+            }
+            
+        } catch (error) {
+            console.error('❌ [REAL-TIME] Audio processing error:', error);
+            this.bufferChunks = [];
+        }
+    }
+
+    async hasSignificantAudioContent(wavBlob) {
+        try {
+            // Convert blob to array buffer and analyze audio content
+            const arrayBuffer = await wavBlob.arrayBuffer();
+            const dataView = new DataView(arrayBuffer);
+            
+            // Skip WAV header (44 bytes) and analyze audio data
+            let maxAmplitude = 0;
+            let totalEnergy = 0;
+            let sampleCount = 0;
+            
+            for (let i = 44; i < arrayBuffer.byteLength; i += 2) {
+                const sample = dataView.getInt16(i, true); // little endian
+                const normalizedSample = Math.abs(sample) / 32768;
+                maxAmplitude = Math.max(maxAmplitude, normalizedSample);
+                totalEnergy += normalizedSample * normalizedSample;
+                sampleCount++;
+            }
+            
+            const avgEnergy = Math.sqrt(totalEnergy / sampleCount);
+            const hasContent = maxAmplitude > 0.01 && avgEnergy > 0.005; // Thresholds for real speech
+            
+            console.log(`🔍 [AUDIO-CHECK] Max: ${maxAmplitude.toFixed(4)}, Avg: ${avgEnergy.toFixed(4)}, HasContent: ${hasContent}`);
+            
+            return hasContent;
+            
+        } catch (error) {
+            console.error('❌ [AUDIO-CHECK] Error validating audio content:', error);
+            return true; // If validation fails, proceed anyway
+        }
+    }
+
+    convertPCMToWAV(pcmChunks, sampleRate) {
+        if (pcmChunks.length === 0) return null;
+        
+        // Calculate total length
+        const totalLength = pcmChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        
+        // Merge all PCM chunks into single array
+        const mergedPCM = new Float32Array(totalLength);
+        let offset = 0;
+        for (const chunk of pcmChunks) {
+            mergedPCM.set(chunk, offset);
+            offset += chunk.length;
+        }
+        
+        // Convert float samples to 16-bit PCM
+        const pcm16 = new Int16Array(totalLength);
+        for (let i = 0; i < totalLength; i++) {
+            const sample = Math.max(-1, Math.min(1, mergedPCM[i]));
+            pcm16[i] = sample * 0x7FFF;
+        }
+        
+        // Create WAV file structure
+        const buffer = new ArrayBuffer(44 + pcm16.length * 2);
+        const view = new DataView(buffer);
+        
+        // WAV header
+        const writeString = (offset, string) => {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        };
+        
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + pcm16.length * 2, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true); // PCM format
+        view.setUint16(22, 1, true); // Mono
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeString(36, 'data');
+        view.setUint32(40, pcm16.length * 2, true);
+        
+        // Write PCM data
+        const samples = new Uint8Array(buffer, 44);
+        const pcmBytes = new Uint8Array(pcm16.buffer);
+        samples.set(pcmBytes);
+        
+        return new Blob([buffer], { type: 'audio/wav' });
+    }
+
     startContinuousMonitoring() {
-        // IMPROVED: Faster monitoring interval
-        this.monitoringInterval = setInterval(() => {
+        console.log('🎤 [REAL-TIME] Starting ultra-responsive voice monitoring...');
+        
+        // Monitor voice activity every 25ms for real-time feedback
+        const monitorInterval = setInterval(() => {
+            if (!this.isRecording) {
+                clearInterval(monitorInterval);
+                return;
+            }
             this.checkSpeechActivity();
-        }, 50); // IMPROVED: Check every 50ms (was 100ms)
+        }, 25);
+        
+        console.log('✅ [REAL-TIME] Voice monitoring active (25ms intervals)');
+    }
+
+    checkSpeechActivity() {
+        if (!this.analyser) return;
+        
+        const bufferLength = this.analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+        this.analyser.getByteFrequencyData(dataArray);
+        
+        // Calculate voice activity
+        let sum = 0;
+        let maxVolume = 0;
+        for (let i = 0; i < bufferLength; i++) {
+            sum += dataArray[i];
+            maxVolume = Math.max(maxVolume, dataArray[i]);
+        }
+        const averageVolume = sum / bufferLength / 255;
+        const normalizedMaxVolume = maxVolume / 255;
+        
+        const currentTime = Date.now();
+        const speechDetected = averageVolume > this.speechThreshold || normalizedMaxVolume > 0.05;
+        
+        if (speechDetected) {
+            if (!this.isSpeaking) {
+                this.isSpeaking = true;
+                this.speechStartTime = currentTime;
+                console.log(`🗣️ [REAL-TIME] Voice detected - continuous processing active`);
+            }
+            this.lastSpeechTime = currentTime;
+            this.lastVolumeLevel = averageVolume; // Track volume for speech-end detection
+        } else {
+            if (this.isSpeaking) {
+                const silenceTime = currentTime - this.lastSpeechTime;
+                const speechDuration = currentTime - this.speechStartTime;
+                
+                // SMART: End speech faster if we had substantial speech duration
+                const smartThreshold = speechDuration > 2000 ? 500 : this.silenceThreshold; // 500ms for longer speech
+                
+                if (silenceTime > smartThreshold) {
+                    console.log(`🤐 [SMART-END] Voice ended after ${silenceTime}ms silence (${speechDuration}ms total speech) - processing now!`);
+                    this.isSpeaking = false;
+                    
+                    // IMMEDIATE: Trigger processing if we have buffered content
+                    if (this.bufferChunks.length > 0) {
+                        console.log(`⚡ [IMMEDIATE] Processing buffered speech immediately`);
+                        this.processBufferedAudio();
+                        this.lastChunkTime = currentTime; // Reset chunk timer
+                    }
+                } else if (silenceTime > 300) {
+                    // Brief pause detection (reduced logging)
+                    if (silenceTime % 200 === 0) { // Log every 200ms to reduce spam
+                        console.log(`⏸️ [PAUSE] Brief pause (${silenceTime}ms) - continuing...`);
+                    }
+                }
+            }
+        }
+        
+        // Update visual feedback
+        this.updateVoiceActivityVisuals(averageVolume, normalizedMaxVolume);
     }
 
     async stopCapture() {
         if (!this.isRecording) return;
 
         try {
-            console.log('🛑 Stopping IMPROVED audio capture...');
+            console.log('🛑 Stopping REAL-TIME audio capture...');
             
-            if (this.monitoringInterval) {
-                clearInterval(this.monitoringInterval);
+            // Process any remaining buffered audio
+            if (this.bufferChunks.length > 0) {
+                await this.processBufferedAudio();
             }
             
-            if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-                this.mediaRecorder.stop();
+            // Clean up Web Audio API
+            if (this.audioProcessor) {
+                this.audioProcessor.disconnect();
+                this.audioProcessor = null;
+            }
+            
+            if (this.audioSource) {
+                this.audioSource.disconnect();
+                this.audioSource = null;
             }
             
             if (this.mediaStream) {
                 this.mediaStream.getTracks().forEach(track => track.stop());
+                this.mediaStream = null;
             }
             
-            if (this.audioContext) {
+            if (this.audioContext && this.audioContext.state !== 'closed') {
                 await this.audioContext.close();
+                this.audioContext = null;
             }
             
             this.isRecording = false;
+            this.bufferChunks = [];
+            this.speechBuffer = [];
+            
             this.updateUI();
             this.stopVisualization();
             
-            console.log('✅ IMPROVED Audio capture stopped');
+            console.log('✅ REAL-TIME Audio capture stopped');
             
         } catch (error) {
             console.error('❌ Error stopping capture:', error);
@@ -423,10 +545,10 @@ class AudioCaptureManager {
 
     updateUI() {
         if (this.isRecording) {
-            this.recordingEl.textContent = '🔴 Recording (IMPROVED)';
+            this.recordingEl.textContent = '🔴 Recording (REAL-TIME WAV)';
             this.recordingEl.style.color = '#ff4444';
         } else {
-            this.recordingEl.textContent = '⚪ Ready (IMPROVED)';
+            this.recordingEl.textContent = '⚪ Ready (REAL-TIME WAV)';
             this.recordingEl.style.color = '#888888';
         }
     }
@@ -436,12 +558,11 @@ class AudioCaptureManager {
         console.log('📊 Status:', message);
     }
 
-    // IMPROVED: Duplicate detection and filtering
     isDuplicateTranscription(text) {
         const cleanText = text.toLowerCase().trim();
         return this.lastTranscriptions.some(prev => {
             const similarity = this.calculateSimilarity(cleanText, prev);
-            return similarity > 0.8; // 80% similarity threshold
+            return similarity > 0.8;
         });
     }
 
@@ -474,210 +595,27 @@ class AudioCaptureManager {
         }
     }
 
-    // FIXED: Convert audio to WAV format for guaranteed OpenAI compatibility
-    async convertToWav(audioBlob) {
-        return new Promise((resolve, reject) => {
-            try {
-                // FIXED: Skip conversion for small files to avoid errors
-                if (audioBlob.size < 5000) {
-                    console.log('🔄 [FIXED] Small file - using original format');
-                    resolve(audioBlob);
-                    return;
-                }
-                
-                // FIXED: Create fresh AudioContext for each conversion
-                const audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                    sampleRate: 44100
-                });
-                const fileReader = new FileReader();
-                
-                fileReader.onload = async (event) => {
-                    try {
-                        const arrayBuffer = event.target.result;
-                        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                        
-                        // Convert to WAV
-                        const wavBuffer = this.audioBufferToWav(audioBuffer);
-                        const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
-                        
-                        // FIXED: Close AudioContext to prevent memory leaks and corruption
-                        await audioContext.close();
-                        
-                        console.log(`🔄 [FIXED] Converted ${Math.round(audioBlob.size/1024)}KB webm to ${Math.round(wavBlob.size/1024)}KB WAV`);
-                        resolve(wavBlob);
-                    } catch (error) {
-                        console.log('🔄 [FIXED] WAV conversion failed, will try MP3 fallback');
-                        // FIXED: Always close AudioContext even on error
-                        await audioContext.close().catch(() => {});
-                        resolve(audioBlob);
-                    }
-                };
-                
-                fileReader.onerror = async () => {
-                    console.log('🔄 [FIXED] FileReader error, using original format');
-                    await audioContext.close().catch(() => {});
-                    resolve(audioBlob);
-                };
-                
-                fileReader.readAsArrayBuffer(audioBlob);
-            } catch (error) {
-                console.log('🔄 [FIXED] Setup error, using original format');
-                resolve(audioBlob);
-            }
-        });
-    }
-
-    // NEW: Convert to MP3 as a more reliable fallback
-    async convertToMp3(audioBlob) {
-        return new Promise((resolve) => {
-            try {
-                // For now, we'll create a properly formatted blob that OpenAI is more likely to accept
-                // Note: True MP3 encoding would require additional libraries, so we'll use a different approach
-                
-                // Create a blob with more explicit headers that OpenAI might accept better
-                const properBlob = new Blob([audioBlob], { 
-                    type: 'audio/ogg; codecs=opus' // OGG is more universally supported
-                });
-                
-                console.log(`🔄 [MP3] Created OGG fallback: ${Math.round(properBlob.size/1024)}KB`);
-                resolve(properBlob);
-            } catch (error) {
-                console.log('🔄 [MP3] Fallback failed, using original');
-                resolve(audioBlob);
-            }
-        });
-    }
-
-    // Convert AudioBuffer to WAV format
-    audioBufferToWav(buffer) {
-        const length = buffer.length;
-        const sampleRate = buffer.sampleRate;
-        const numberOfChannels = buffer.numberOfChannels;
-        const bytesPerSample = 2; // 16-bit
-        const blockAlign = numberOfChannels * bytesPerSample;
-        const byteRate = sampleRate * blockAlign;
-        const dataSize = length * blockAlign;
-        const bufferSize = 44 + dataSize;
-        
-        const arrayBuffer = new ArrayBuffer(bufferSize);
-        const view = new DataView(arrayBuffer);
-        
-        // WAV header
-        const writeString = (offset, string) => {
-            for (let i = 0; i < string.length; i++) {
-                view.setUint8(offset + i, string.charCodeAt(i));
-            }
-        };
-        
-        let offset = 0;
-        writeString(offset, 'RIFF'); offset += 4;
-        view.setUint32(offset, bufferSize - 8, true); offset += 4;
-        writeString(offset, 'WAVE'); offset += 4;
-        writeString(offset, 'fmt '); offset += 4;
-        view.setUint32(offset, 16, true); offset += 4;
-        view.setUint16(offset, 1, true); offset += 2; // PCM format
-        view.setUint16(offset, numberOfChannels, true); offset += 2;
-        view.setUint32(offset, sampleRate, true); offset += 4;
-        view.setUint32(offset, byteRate, true); offset += 4;
-        view.setUint16(offset, blockAlign, true); offset += 2;
-        view.setUint16(offset, 16, true); offset += 2; // bits per sample
-        writeString(offset, 'data'); offset += 4;
-        view.setUint32(offset, dataSize, true); offset += 4;
-        
-        // Convert audio data
-        const channels = [];
-        for (let i = 0; i < numberOfChannels; i++) {
-            channels.push(buffer.getChannelData(i));
-        }
-        
-        let sampleOffset = offset;
-        for (let i = 0; i < length; i++) {
-            for (let channel = 0; channel < numberOfChannels; channel++) {
-                const sample = Math.max(-1, Math.min(1, channels[channel][i]));
-                const int16 = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-                view.setInt16(sampleOffset, int16, true);
-                sampleOffset += 2;
-            }
-        }
-        
-        return arrayBuffer;
-    }
-
     async transcribeWithOpenAI(audioBlob) {
+        console.log(`🎯 [TRANSCRIBE] Starting WAV transcription for ${Math.round(audioBlob.size/1024)}KB...`);
+        
         if (!this.whisperReady || !this.openAIApiKey) {
-            console.log('🔇 Skipping transcription - not ready');
+            console.log('🔇 [TRANSCRIBE] Skipping - not ready or no API key');
             return;
         }
 
-        if (audioBlob.size < 1000) { // IMPROVED: Very small threshold
-            console.log('🔇 Skipping tiny audio chunk');
+        if (audioBlob.size < 1000) {
+            console.log('🔇 [TRANSCRIBE] Skipping tiny audio chunk');
             return;
         }
-
-        // FIXED: Ensure we don't block continuous listening
-        console.log(`🤖 [CONTINUOUS] Processing ${Math.round(audioBlob.size/1024)}KB audio while continuing to listen...`);
 
         try {
-            // FIXED: Smart format handling with improved fallback chain
-            let finalBlob = audioBlob;
-            let filename = 'audio.webm';
-            let contentType = audioBlob.type || 'audio/webm';
-            
-            // Try WAV conversion first (most reliable for OpenAI)
-            if (audioBlob.size > 50000) { // 50KB threshold for WAV conversion
-                try {
-                    const wavBlob = await this.convertToWav(audioBlob);
-                    if (wavBlob !== audioBlob && wavBlob.type === 'audio/wav') {
-                        finalBlob = wavBlob;
-                        filename = 'audio.wav';
-                        contentType = 'audio/wav';
-                        console.log(`📁 [CONTINUOUS] Successfully using WAV format: ${filename}`);
-                    } else {
-                        throw new Error('WAV conversion returned original blob');
-                    }
-                } catch (wavError) {
-                    console.log('🔄 [CONTINUOUS] WAV conversion failed, trying OGG fallback...');
-                    
-                    // Try OGG conversion as fallback
-                    try {
-                        const oggBlob = await this.convertToMp3(audioBlob); // This actually creates OGG
-                        finalBlob = oggBlob;
-                        filename = 'audio.ogg';
-                        contentType = 'audio/ogg; codecs=opus';
-                        console.log(`📁 [CONTINUOUS] Using OGG fallback format: ${filename}`);
-                    } catch (oggError) {
-                        console.log('🔄 [CONTINUOUS] OGG conversion failed, using original webm with better headers');
-                        // Last resort: enhanced webm headers
-                        finalBlob = new Blob([audioBlob], { type: 'audio/webm; codecs=opus' });
-                        filename = 'audio.webm';
-                        contentType = 'audio/webm; codecs=opus';
-                    }
-                }
-            } else {
-                console.log(`📁 [CONTINUOUS] Small file (${Math.round(audioBlob.size/1024)}KB), trying OGG format first`);
-                
-                // For smaller files, skip WAV and try OGG directly
-                try {
-                    const oggBlob = await this.convertToMp3(audioBlob);
-                    finalBlob = oggBlob;
-                    filename = 'audio.ogg';
-                    contentType = 'audio/ogg; codecs=opus';
-                    console.log(`📁 [CONTINUOUS] Using OGG format for small file: ${filename}`);
-                } catch (oggError) {
-                    console.log('🔄 [CONTINUOUS] Small file OGG failed, using enhanced webm');
-                    finalBlob = new Blob([audioBlob], { type: 'audio/webm; codecs=opus' });
-                    filename = 'audio.webm';
-                    contentType = 'audio/webm; codecs=opus';
-                }
-            }
-
             const formData = new FormData();
-            formData.append('file', finalBlob, filename);
+            formData.append('file', audioBlob, 'audio.wav'); // WAV format!
             formData.append('model', 'whisper-1');
             formData.append('response_format', 'json');
             formData.append('language', 'en');
 
-            console.log(`📡 [CONTINUOUS] Sending ${filename} (${Math.round(finalBlob.size/1024)}KB) to OpenAI...`);
+            console.log(`📡 [REAL-TIME] Sending WAV file (${Math.round(audioBlob.size/1024)}KB) to OpenAI...`);
 
             const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
                 method: 'POST',
@@ -687,10 +625,11 @@ class AudioCaptureManager {
                 body: formData
             });
 
+            console.log(`📊 [TRANSCRIBE] OpenAI response status: ${response.status}`);
+
             if (!response.ok) {
                 const errorText = await response.text();
-                console.log(`❌ [CONTINUOUS] OpenAI API Error (${filename}): ${response.status} - ${errorText.slice(0, 100)}... CONTINUING TO LISTEN`);
-                // FIXED: Don't throw error, just log and continue listening
+                console.log(`❌ [REAL-TIME] OpenAI API Error: ${response.status} - ${errorText.slice(0, 200)}...`);
                 return;
             }
 
@@ -699,155 +638,46 @@ class AudioCaptureManager {
             if (result && result.text && result.text.trim().length > 0) {
                 const transcription = result.text.trim();
                 
-                // IMPROVED: Check for duplicates
+                // Check for duplicates
                 if (this.isDuplicateTranscription(transcription)) {
-                    console.log('🔄 [CONTINUOUS] Duplicate transcription detected, skipping but CONTINUING TO LISTEN');
+                    console.log('🔄 [REAL-TIME] Duplicate transcription detected, skipping');
                     return;
                 }
                 
                 this.addToTranscriptionHistory(transcription);
-                console.log(`✅ [CONTINUOUS] Transcription successful (${filename}):`, transcription, '- STILL LISTENING FOR MORE');
+                console.log(`✅ [REAL-TIME] WAV transcription successful:`, transcription);
                 
                 // Send to main process
                 ipcRenderer.send('transcriptionResult', transcription);
                 
-                // IMPROVED: Immediate coaching analysis (non-blocking)
+                // Background coaching analysis
                 if (this.coachingEnabled) {
-                    // FIXED: Don't await this - let it run in background
                     this.analyzeForInterviewCoaching(transcription).catch(error => {
                         console.error('❌ [BACKGROUND] Coaching error:', error);
                     });
                 }
-                
-                console.log('🎤 [CONTINUOUS] Ready for next speech input...');
             } else {
-                console.log('🔇 [CONTINUOUS] No transcription result, CONTINUING TO LISTEN');
+                console.log('🔇 [REAL-TIME] No transcription result');
             }
 
         } catch (error) {
-            console.log('❌ [CONTINUOUS] Whisper error but CONTINUING TO LISTEN:', error.message);
-            // FIXED: Don't break the flow, just continue listening
-        }
-        
-        console.log('🔄 [CONTINUOUS] Transcription process complete - speech monitoring active');
-    }
-
-    checkSpeechActivity() {
-        if (!this.analyser) return;
-        
-        const bufferLength = this.analyser.frequencyBinCount;
-        const dataArray = new Uint8Array(bufferLength);
-        this.analyser.getByteFrequencyData(dataArray);
-        
-        // IMPROVED: Better volume calculation
-        let sum = 0;
-        let maxVolume = 0;
-        for (let i = 0; i < bufferLength; i++) {
-            sum += dataArray[i];
-            maxVolume = Math.max(maxVolume, dataArray[i]);
-        }
-        const averageVolume = sum / bufferLength / 255;
-        const normalizedMaxVolume = maxVolume / 255;
-        
-        const currentTime = Date.now();
-        
-        // IMPROVED: Use both average and peak detection
-        const speechDetected = averageVolume > this.speechThreshold || normalizedMaxVolume > 0.05;
-        
-        if (speechDetected) {
-            if (!this.isSpeaking) {
-                this.isSpeaking = true;
-                this.speechStartTime = currentTime;
-                console.log(`🗣️ [CONTINUOUS] Speech started (avg: ${averageVolume.toFixed(3)}, peak: ${normalizedMaxVolume.toFixed(3)})`);
-            }
-            this.lastSpeechTime = currentTime;
-        } else {
-            if (this.isSpeaking) {
-                const silenceTime = currentTime - this.lastSpeechTime;
-                if (silenceTime > this.silenceThreshold) {
-                    const speechDuration = currentTime - this.speechStartTime;
-                    
-                    console.log(`🤐 [CONTINUOUS] Speech ended (duration: ${speechDuration}ms, silence: ${silenceTime}ms)`);
-                    
-                    if (speechDuration >= this.minSpeechDuration && this.speechBuffer.length > 0) {
-                        console.log(`🎤 [CONTINUOUS] Processing ${this.speechBuffer.length} chunks - WILL CONTINUE LISTENING`);
-                        // FIXED: Process asynchronously to avoid blocking the monitoring loop
-                        this.processBufferedSpeechImmediate().then(() => {
-                            console.log('✅ [CONTINUOUS] Processing complete - monitoring continues...');
-                        }).catch((error) => {
-                            console.error('❌ [CONTINUOUS] Processing error:', error);
-                            // FIXED: Clear buffers on error and continue
-                            this.speechBuffer = [];
-                            this.pendingAudioChunks = [];
-                            console.log('🔄 [CONTINUOUS] Buffers cleared - continuing to monitor...');
-                        });
-                    }
-                    
-                    // FIXED: Reset speaking state immediately (don't wait for processing)
-                    this.isSpeaking = false;
-                    // NOTE: speechBuffer will be cleared in processBufferedSpeechImmediate
-                }
-            }
-        }
-    }
-
-    async processBufferedSpeechImmediate() {
-        if (!this.whisperReady || this.speechBuffer.length === 0) {
-            return;
-        }
-
-        try {
-            // FIXED: Copy and clear speech buffer immediately to avoid blocking
-            const currentSpeechChunks = [...this.speechBuffer];
-            this.speechBuffer = []; // Clear immediately so new speech can be captured
-            console.log(`🎵 [BUFFER] Processing ${currentSpeechChunks.length} chunks while continuing to listen...`);
-            
-            // Add to pending buffer for processing
-            this.pendingAudioChunks.push(...currentSpeechChunks);
-            
-            // Calculate total buffered size
-            const totalBufferedSize = this.pendingAudioChunks.reduce((total, chunk) => total + chunk.size, 0);
-            console.log(`📊 [BUFFER] Total buffered: ${Math.round(totalBufferedSize/1024)}KB`);
-            
-            // If buffer is large enough, process immediately
-            if (totalBufferedSize >= this.minAudioSizeForProcessing) {
-                console.log(`🎤 [BUFFER] Buffer ready (${Math.round(totalBufferedSize/1024)}KB), processing while monitoring continues...`);
-                
-                const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
-                const combinedBlob = new Blob(this.pendingAudioChunks, { type: mimeType });
-                this.pendingAudioChunks = []; // Clear the buffer immediately
-                
-                console.log('🔄 [CONTINUOUS] Transcribing while ACTIVELY listening for new speech...');
-                
-                // FIXED: Process asynchronously without blocking speech monitoring
-                this.transcribeWithOpenAI(combinedBlob).then(() => {
-                    console.log('✅ [CONTINUOUS] Transcription complete - speech monitoring NEVER stopped');
-                }).catch(error => {
-                    console.error('❌ [CONTINUOUS] Transcription error but monitoring continues:', error);
-                });
-                
-                this.lastBufferFlushTime = Date.now();
-            } else {
-                console.log(`⏳ [BUFFER] Buffer needs more audio (${Math.round(totalBufferedSize/1024)}KB) - STILL listening...`);
-                this.lastBufferFlushTime = Date.now();
-            }
-            
-        } catch (error) {
-            console.error('❌ [BUFFER] Error processing speech but CONTINUING to monitor:', error);
-            // FIXED: Clear all buffers on error but don't stop monitoring
-            this.speechBuffer = [];
-            this.pendingAudioChunks = [];
-            console.log('🔄 [CONTINUOUS] Buffers cleared - speech monitoring ACTIVE');
+            console.log('❌ [REAL-TIME] Whisper error:', error.message);
         }
     }
 
     async analyzeForInterviewCoaching(transcription) {
         if (this.processingCoaching) {
-            console.log('🎓 [IMPROVED] Already processing coaching, skipping...');
+            console.log('🎓 Already processing coaching, skipping...');
             return;
         }
 
-        console.log('🎓 [IMPROVED] Analyzing for FAST interview coaching...');
+        // SMART FILTERING: Only coach meaningful interview-related speech
+        if (!this.shouldProvideCoaching(transcription)) {
+            console.log(`🎓 [FILTERED] Skipping coaching for: "${transcription}" (too casual/short)`);
+            return;
+        }
+
+        console.log('🎓 Analyzing for TARGETED interview coaching...');
         
         this.conversationHistory.push({
             timestamp: Date.now(),
@@ -855,18 +685,16 @@ class AudioCaptureManager {
             type: 'transcription'
         });
 
-        // Keep history manageable
         if (this.conversationHistory.length > 10) {
             this.conversationHistory = this.conversationHistory.slice(-10);
         }
 
-        // IMPROVED: Immediate coaching analysis
         try {
             this.processingCoaching = true;
             const coaching = await this.getInterviewCoaching(transcription);
             
             if (coaching) {
-                console.log('✅ [IMPROVED] FAST coaching generated');
+                console.log('✅ TARGETED coaching generated');
                 ipcRenderer.send('interviewCoaching', {
                     advice: coaching,
                     originalTranscription: transcription,
@@ -874,15 +702,77 @@ class AudioCaptureManager {
                 });
             }
         } catch (error) {
-            console.error('❌ [IMPROVED] Coaching error:', error);
+            console.error('❌ Coaching error:', error);
         } finally {
             this.processingCoaching = false;
         }
     }
 
+    shouldProvideCoaching(transcription) {
+        const text = transcription.trim().toLowerCase();
+        
+        // FILTER 1: Minimum length - must be at least 4 words or 15 characters
+        const words = text.split(/\s+/).filter(word => word.length > 0);
+        if (words.length < 4 || text.length < 15) {
+            return false;
+        }
+        
+        // FILTER 2: Casual/social words that don't need coaching
+        const casualWords = [
+            'oh', 'ah', 'um', 'uh', 'hmm', 'yeah', 'yes', 'no', 'okay', 'ok',
+            'bye', 'hello', 'hi', 'thanks', 'thank you', 'you', 'me', 'i',
+            'please', 'sorry', 'excuse me', 'pardon', 'what', 'huh'
+        ];
+        
+        // If the entire transcription is just casual words, skip
+        const nonCasualWords = words.filter(word => 
+            !casualWords.includes(word) && 
+            word.length > 2 && 
+            !/^[a-z]{1,2}$/.test(word) // Skip very short words like "to", "is", "of"
+        );
+        
+        if (nonCasualWords.length < 2) {
+            return false;
+        }
+        
+        // FILTER 3: Repetitive words (like "bye bye bye")
+        const uniqueWords = [...new Set(words)];
+        if (uniqueWords.length < words.length / 2) {
+            return false; // Too repetitive
+        }
+        
+        // FILTER 4: Look for interview-relevant content
+        const interviewKeywords = [
+            'experience', 'project', 'skill', 'challenge', 'team', 'manage', 'develop',
+            'code', 'programming', 'software', 'technical', 'problem', 'solution',
+            'work', 'company', 'role', 'responsibility', 'achievement', 'goal',
+            'learn', 'improve', 'difficult', 'successful', 'failure', 'lesson',
+            'algorithm', 'database', 'system', 'design', 'framework', 'language',
+            'java', 'python', 'javascript', 'react', 'node', 'api', 'backend', 'frontend'
+        ];
+        
+        const hasInterviewContent = words.some(word => 
+            interviewKeywords.includes(word) ||
+            word.length > 6 // Longer words are often more meaningful
+        );
+        
+        // FILTER 5: Questions deserve coaching (they might be interview questions)
+        const isQuestion = text.includes('?') || 
+                          text.startsWith('what') || 
+                          text.startsWith('how') || 
+                          text.startsWith('why') || 
+                          text.startsWith('when') || 
+                          text.startsWith('where') ||
+                          text.startsWith('tell me') ||
+                          text.startsWith('describe') ||
+                          text.startsWith('explain');
+        
+        return hasInterviewContent || isQuestion;
+    }
+
     async getInterviewCoaching(transcription) {
         try {
-            console.log('🎓 [IMPROVED] Getting FAST GPT-4o coaching...');
+            console.log('🎓 Getting FAST GPT-4o coaching...');
 
             const prompt = this.createCoachingPrompt(transcription);
             
@@ -904,24 +794,24 @@ class AudioCaptureManager {
                             content: prompt
                         }
                     ],
-                    max_tokens: 150, // IMPROVED: Shorter for speed
-                    temperature: 0.3 // IMPROVED: Lower for consistency
+                    max_tokens: 150,
+                    temperature: 0.3
                 })
             });
 
             if (!response.ok) {
-                console.error('❌ [IMPROVED] Coaching API error:', response.status);
+                console.error('❌ Coaching API error:', response.status);
                 return null;
             }
 
             const result = await response.json();
             const advice = result.choices?.[0]?.message?.content?.trim();
             
-            console.log('✅ [IMPROVED] FAST coaching received');
+            console.log('✅ FAST coaching received');
             return advice;
 
         } catch (error) {
-            console.error('❌ [IMPROVED] Coaching generation error:', error);
+            console.error('❌ Coaching generation error:', error);
             return null;
         }
     }
@@ -943,44 +833,89 @@ Provide CONCISE coaching advice (max 50 words) focusing on:
 Be direct and actionable.`;
     }
 
-    // FIXED: Audio chunk buffering for continuous speech
-    startBufferProcessor() {
-        setInterval(() => {
-            this.processBuffer();
-        }, 100); // Check every 100ms
+    initializeRealTimeFeatures() {
+        console.log('🚀 Initializing REAL-TIME WAV features...');
+        
+        this.createVoiceActivityIndicator();
+        
+        console.log('✅ REAL-TIME WAV features initialized');
     }
 
-    processBuffer() {
-        const currentTime = Date.now();
-        const elapsedTime = currentTime - this.lastBufferFlushTime;
+    createVoiceActivityIndicator() {
+        const indicator = document.createElement('div');
+        indicator.id = 'voice-activity-indicator';
+        indicator.style.cssText = `
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(45deg, #1DB954, #1ed760);
+            border: 3px solid rgba(255,255,255,0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: white;
+            box-shadow: 0 4px 15px rgba(29, 185, 84, 0.3);
+            transition: all 0.1s ease;
+            opacity: 0.3;
+            z-index: 1000;
+        `;
+        indicator.textContent = '🎤';
+        document.body.appendChild(indicator);
+        this.voiceActivityIndicator = indicator;
+    }
 
-        if (this.pendingAudioChunks.length > 0 && elapsedTime > this.maxBufferWaitTime) {
-            console.log(`⏰ [BUFFER] Timeout reached (${elapsedTime}ms), processing buffered audio...`);
-            
-            const audioChunks = [...this.pendingAudioChunks];
-            this.pendingAudioChunks = []; // Clear the buffer
-            
-            const mimeType = this.mediaRecorder?.mimeType || 'audio/webm';
-            const combinedBlob = new Blob(audioChunks, { type: mimeType });
-            
-            console.log(`🎵 [BUFFER] Created ${Math.round(combinedBlob.size/1024)}KB blob from timeout`);
-            
-            if (combinedBlob.size >= 10000) { // Lower threshold for timeout processing
-                console.log('🔄 [CONTINUOUS] Transcribing buffered audio...');
-                this.transcribeWithOpenAI(combinedBlob);
-                console.log('✅ [CONTINUOUS] Timeout transcription complete - STILL LISTENING');
+    updateVoiceActivityVisuals(voiceLevel, peakLevel) {
+        if (!this.voiceActivityIndicator) return;
+        
+        const intensity = Math.min(voiceLevel * 10, 1);
+        const scale = 1 + (intensity * 0.3);
+        const opacity = 0.3 + (intensity * 0.7);
+        
+        let color = '#1DB954';
+        if (intensity > 0.7) {
+            color = '#ff6b6b';
+        } else if (intensity > 0.4) {
+            color = '#ffd93d';
+        }
+        
+        this.voiceActivityIndicator.style.cssText = `
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(45deg, ${color}, ${color}dd);
+            border: 3px solid rgba(255,255,255,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: white;
+            box-shadow: 0 4px 15px ${color}66;
+            transition: all 0.1s ease;
+            opacity: ${opacity};
+            transform: scale(${scale});
+            z-index: 1000;
+        `;
+        
+        if (this.isSpeaking) {
+            this.voiceActivityIndicator.textContent = '🗣️';
+        } else if (intensity > 0.2) {
+            this.voiceActivityIndicator.textContent = '👂';
             } else {
-                console.log('🔇 [BUFFER] Even timeout blob too small, discarding');
-            }
-            
-            this.lastBufferFlushTime = currentTime;
+            this.voiceActivityIndicator.textContent = '🎤';
         }
     }
 }
 
 // Initialize when page loads
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('[RENDERER] 📄 IMPROVED Renderer script loaded');
+    console.log('[RENDERER] 📄 REAL-TIME WAV Renderer script loaded');
     window.audioManager = new AudioCaptureManager();
-    console.log('[RENDERER] 🚀 IMPROVED Audio Capture Manager initialized');
+    console.log('[RENDERER] 🚀 REAL-TIME WAV Audio Capture Manager initialized');
 }); 

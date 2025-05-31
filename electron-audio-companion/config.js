@@ -1,3 +1,6 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 // OpenAI Whisper API Configuration
 // 
 // TO USE REAL TRANSCRIPTION (like Cluely):
@@ -9,29 +12,40 @@ const config = {
     // OpenAI API Key - REQUIRED for real transcription AND interview coaching
     OPENAI_API_KEY: process.env.OPENAI_API_KEY || '', // Set in .env file
     
-    // IMPROVED: Whisper Model Settings for SPEED
+    // REAL-TIME: Whisper Model Settings for ULTRA-FAST processing
     WHISPER_MODEL: 'whisper-1',
     WHISPER_LANGUAGE: 'en', // Specify language for faster processing
     
-    // IMPROVED: GPT-4o Interview Coaching Settings for SPEED
+    // REAL-TIME: GPT-4o Interview Coaching Settings for INSTANT feedback
     COACHING_MODEL: 'gpt-4o',
     COACHING_ENABLED: true,
-    COACHING_MAX_TOKENS: 150, // Shorter responses for speed
-    COACHING_TEMPERATURE: 0.3, // Lower for consistency
+    COACHING_MAX_TOKENS: 100, // FASTER: Even shorter responses (was 150)
+    COACHING_TEMPERATURE: 0.2, // LOWER: More consistent for real-time (was 0.3)
     
-    // IMPROVED: Audio Settings for FASTER processing
-    AUDIO_CHUNK_DURATION: 200, // REDUCED: 200ms chunks (was 1000ms)
-    MIN_AUDIO_SIZE: 500, // REDUCED: 500 bytes (was 1024)
+    // REAL-TIME: Audio Settings for INSTANT processing
+    AUDIO_CHUNK_DURATION: 100, // ULTRA-FAST: 100ms chunks (was 200ms)
+    MIN_AUDIO_SIZE: 200, // ULTRA-FAST: 200 bytes (was 500)
     
-    // IMPROVED: Speech detection thresholds for FASTER response
-    SILENCE_THRESHOLD: 800, // REDUCED: 0.8s silence (was 1.5s)
-    MIN_SPEECH_DURATION: 500, // REDUCED: 0.5s minimum (was 0.8s)
-    SPEECH_THRESHOLD: 0.01, // Optimized threshold
+    // REAL-TIME: Speech detection thresholds for INSTANT response
+    SILENCE_THRESHOLD: 300, // ULTRA-FAST: 0.3s silence (was 800ms)
+    MIN_SPEECH_DURATION: 200, // ULTRA-FAST: 0.2s minimum (was 500ms)
+    SPEECH_THRESHOLD: 0.005, // ULTRA-SENSITIVE: Lower threshold (was 0.01)
     
-    // IMPROVED: Processing optimization
+    // REAL-TIME: Processing optimization for 40 FPS monitoring
     MAX_TRANSCRIPTION_HISTORY: 5, // Track recent transcriptions
     TRANSCRIPTION_SIMILARITY_THRESHOLD: 0.8, // Duplicate detection
-    PROCESSING_INTERVAL: 50 // Check speech every 50ms
+    PROCESSING_INTERVAL: 25, // ULTRA-FAST: Check speech every 25ms (40 FPS)
+    
+    // NEW: Real-time streaming settings
+    STREAMING_ENABLED: true,
+    STREAMING_CHUNK_SIZE: 100, // Process every 100ms
+    VOICE_ACTIVITY_DETECTION: true,
+    CONTINUOUS_LISTENING: true,
+    
+    // NEW: Visual feedback settings
+    VISUAL_FEEDBACK_ENABLED: true,
+    VOICE_FREQUENCY_RANGE: [300, 3000], // Human voice frequencies
+    VOICE_ACTIVITY_WINDOW: 10 // Smooth voice detection over 10 samples
 };
 
 module.exports = config; 

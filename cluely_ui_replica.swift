@@ -957,14 +957,20 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
         responseContainer.superview?.addSubview(responseContainer, positioned: .above, relativeTo: nil)
         responseContainer.layer?.zPosition = 999
         
+        // REMOVED: Hardcoded "Connecting to GPT-4o" message that was appearing as unwanted preset response
         // Set initial text and calculate required height
-        let initialText = "🔍 Connecting to GPT-4o... Please wait..."
-        let formattedInitialText = formatAIResponseText(initialText)
-        responseTextView.textStorage?.setAttributedString(formattedInitialText)
+        // let initialText = "🔍 Connecting to GPT-4o... Please wait..."
+        // let formattedInitialText = formatAIResponseText(initialText)
+        // responseTextView.textStorage?.setAttributedString(formattedInitialText)
+        // 
+        // // Calculate and apply dynamic height
+        // let requiredHeight = calculateRequiredHeight(for: initialText)
+        // resizeResponseContainer(to: requiredHeight)
         
-        // Calculate and apply dynamic height
-        let requiredHeight = calculateRequiredHeight(for: initialText)
-        resizeResponseContainer(to: requiredHeight)
+        // FIXED: Start with empty container, only show content when real AI response comes in
+        responseTextView.string = ""
+        let minHeight = minResponseHeight
+        resizeResponseContainer(to: minHeight)
         
         // Force layout and display updates for ALL relevant views
         responseContainer.needsLayout = true
@@ -979,7 +985,7 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
         responseTextView.layoutManager?.ensureLayout(for: responseTextView.textContainer!)
         responseTextView.needsDisplay = true
         
-        print("🖼️ Response container shown with dynamic sizing: height = \(requiredHeight)")
+        print("🖼️ Response container shown with minimal height: \(minHeight)")
         print("📏 responseContainer frame: \(responseContainer.frame)")
         print("📏 responseTextView frame: \(responseTextView.frame)")
         print("📏 window frame: \(window.frame)")
@@ -1302,6 +1308,16 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
                     self.handleTranscription(text)
                 }
                 
+            case "voiceActivity":
+                if let activity = json["activity"] as? String {
+                    self.handleRealTimeVoiceActivity(activity, data: json)
+                }
+                
+            case "streamingTranscription":
+                if let text = json["text"] as? String {
+                    self.handleStreamingTranscription(text, isPartial: json["partial"] as? Bool ?? false)
+                }
+                
             case "audioCaptureStarted":
                 print("🎤 Audio capture started in Electron")
                 self.isListening = true
@@ -1319,6 +1335,79 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
             default:
                 print("❓ Unknown message type from Electron: \(type)")
             }
+        }
+    }
+    
+    private func handleRealTimeVoiceActivity(_ activity: String, data: [String: Any]) {
+        switch activity {
+        case "speechStarted":
+            print("🗣️ [REAL-TIME] Speech detected - user is speaking")
+            // REMOVED: Automatic status message that was appearing as unwanted preset response
+            // if interviewMode && isResponseVisible {
+            //     updateResponseText("🗣️ LISTENING... \n\nAI is analyzing your speech in real-time.\nSpeak naturally - you'll get instant feedback!")
+            // }
+            
+        case "speechEnded":
+            if let duration = data["duration"] as? Int {
+                print("🤐 [REAL-TIME] Speech ended - duration: \(duration)ms")
+                // REMOVED: Automatic status message that was appearing as unwanted preset response
+                // if interviewMode && isResponseVisible {
+                //     updateResponseText("⚡ PROCESSING...\n\nAnalyzing your response and preparing AI feedback...")
+                // }
+            }
+            
+        default:
+            break
+        }
+    }
+    
+    private func handleStreamingTranscription(_ text: String, isPartial: Bool) {
+        print("🌊 [STREAMING] \(isPartial ? "Partial" : "Final") transcription: \(text)")
+        
+        // REMOVED: Automatic streaming status messages that were appearing as unwanted preset responses
+        // if interviewMode && isResponseVisible {
+        //     let prefix = isPartial ? "🌊 STREAMING: " : "✅ HEARD: "
+        //     let status = isPartial ? "Getting real-time AI analysis..." : "Preparing complete response..."
+        //     
+        //     updateResponseText("\(prefix)\"\(text)\"\n\n\(status)")
+        //     
+        //     // If this is a partial transcription and long enough, start getting AI feedback
+        //     if isPartial && text.count >= 10 {
+        //         Task {
+        //             await self.analyzePartialTranscription(text)
+        //         }
+        //     }
+        // }
+    }
+    
+    private func analyzePartialTranscription(_ text: String) async {
+        // Quick AI analysis for streaming feedback
+        guard !isProcessingAI else { return }
+        
+        print("⚡ [STREAMING] Getting instant AI feedback for: \(text)")
+        
+        let quickPrompt = """
+        User is speaking: "\(text)"
+        
+        Provide instant interview feedback in 1-2 sentences:
+        - Quick tip for their response
+        - What to add or improve
+        
+        Keep it under 40 words for real-time delivery.
+        """
+        
+        do {
+            let quickResponse = try await callOpenAIAPI(prompt: quickPrompt)
+            
+            await MainActor.run {
+                let currentText = self.responseTextView.string
+                let enhancedText = currentText + "\n\n💡 INSTANT TIP: \(quickResponse)"
+                self.updateResponseText(enhancedText)
+            }
+            
+            print("✅ [STREAMING] Instant feedback delivered")
+        } catch {
+            print("❌ [STREAMING] Quick feedback error: \(error)")
         }
     }
     
@@ -1354,9 +1443,14 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
             conversationHistory = Array(conversationHistory.suffix(10))
         }
 
-        // FIXED: Immediately analyze transcription with AI like screen analysis
-        Task {
-            await analyzeTranscriptionWithGPT4o(transcription: text)
+        // FIXED: Only analyze transcription if interview mode is active AND user wants coaching
+        if interviewMode && isListening {
+            print("🎓 [INTERVIEW MODE] Analyzing transcription for coaching...")
+            Task {
+                await analyzeTranscriptionWithGPT4o(transcription: text)
+            }
+        } else {
+            print("🔇 [PASSIVE] Transcription logged but no coaching (interview mode: \(interviewMode), listening: \(isListening))")
         }
     }
     
@@ -1474,13 +1568,6 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
             "type": "startAudioCapture"
         ])
         
-        // Show response container with status
-        if !isResponseVisible {
-            showAIResponseContainer()
-        }
-        
-        updateResponseText("🎤 REAL-TIME VOICE ANALYSIS\n\n🗣️ Speak now and get instant AI responses!\n\n✨ The AI will analyze your speech in real-time and provide helpful insights.")
-        
         print("✅ Real-time voice analysis activated")
     }
     
@@ -1495,11 +1582,6 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
             "type": "stopAudioCapture"
         ])
         
-        // Update UI
-        if isResponseVisible {
-            updateResponseText("🛑 Interview coaching stopped.\n\nPress microphone button to start listening again.")
-        }
-        
         print("✅ Interview coaching mode deactivated")
     }
     
@@ -1507,13 +1589,34 @@ class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSe
         // Find microphone button and update its appearance
         if let containerView = window.contentView {
             for subview in containerView.subviews {
-                if let button = subview as? NSButton, button.title.contains("🎤") {
+                if let button = subview as? NSButton, button.title.contains("🎤") || button.title.contains("🔴") {
                     if isListening {
-                        button.title = "🔴 Stop" // Red dot when listening
-                        button.layer?.backgroundColor = NSColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 0.3).cgColor
+                        button.title = "🔴 LIVE" // More descriptive when listening
+                        button.layer?.backgroundColor = NSColor(red: 0.9, green: 0.2, blue: 0.2, alpha: 0.4).cgColor
+                        
+                        // Add pulsing animation for active listening
+                        let pulseAnimation = CABasicAnimation(keyPath: "opacity")
+                        pulseAnimation.duration = 1.0
+                        pulseAnimation.fromValue = 0.4
+                        pulseAnimation.toValue = 0.8
+                        pulseAnimation.autoreverses = true
+                        pulseAnimation.repeatCount = Float.infinity
+                        button.layer?.add(pulseAnimation, forKey: "pulse")
+                        
+                        // Add subtle glow effect
+                        button.layer?.shadowOpacity = 0.4
+                        button.layer?.shadowColor = NSColor.red.cgColor
+                        button.layer?.shadowRadius = 8
+                        
                     } else {
                         button.title = "🎤 Coach" // Microphone when not listening
                         button.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+                        
+                        // Remove animations and effects
+                        button.layer?.removeAnimation(forKey: "pulse")
+                        button.layer?.shadowOpacity = 0.15
+                        button.layer?.shadowColor = NSColor.black.cgColor
+                        button.layer?.shadowRadius = 2
                     }
                 }
             }
