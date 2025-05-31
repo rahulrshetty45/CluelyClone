@@ -1,0 +1,64 @@
+{
+  "name": "cluely-audio-companion",
+  "version": "1.0.0",
+  "description": "Electron companion for Cluely UI audio capture",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "keywords": [
+    "electron",
+    "audio",
+    "microphone",
+    "screen-recording",
+    "macos"
+  ],
+  "author": "Cluely Team",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^32.3.3",
+    "electron-builder": "^25.0.0"
+  },
+  "dependencies": {
+    "@picovoice/porcupine-web": "^3.0.3",
+    "@picovoice/web-voice-processor": "^4.0.9",
+    "@xenova/transformers": "^2.17.2",
+    "openai": "^4.103.0",
+    "ws": "^8.18.0"
+  },
+  "build": {
+    "productName": "Cluely Audio Companion",
+    "appId": "com.cluely.audio-companion",
+    "directories": {
+      "output": "dist"
+    },
+    "mac": {
+      "target": {
+        "target": "default",
+        "arch": [
+          "arm64",
+          "x64"
+        ]
+      },
+      "type": "distribution",
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Cluely needs microphone access to capture audio for AI analysis and interview assistance.",
+        "NSCameraUsageDescription": "Cluely needs camera access for video capture functionality.",
+        "LSUIElement": true
+      },
+      "category": "public.app-category.productivity"
+    },
+    "files": [
+      "main.js",
+      "renderer.js",
+      "index.html",
+      "assets/**/*"
+    ]
+  }
+}

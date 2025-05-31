@@ -1,0 +1,1563 @@
+#!/usr/bin/env swift
+
+import Cocoa
+import Foundation
+import Vision
+import ScreenCaptureKit
+import AVFoundation
+import Speech
+
+/**
+ * Cluely UI Replica - Exact Interface Recreation with AI Integration
+ * 
+ * This recreates the exact floating interface design from the original Cluely,
+ * including the horizontal bar layout, dark theme, and all UI elements.
+ * 
+ * Features:
+ * - Global hotkey: Cmd+Shift+\ to show/hide
+ * - Window movement: Cmd + Arrow keys
+ * - Screenshot hiding
+ * - Screen OCR (Vision framework)
+ * - GPT-4o API integration
+ * - Interview Coaching via Electron Audio Companion
+ */
+
+class CluelyUIDelegate: NSObject, NSApplicationDelegate, SCStreamDelegate, URLSessionWebSocketDelegate {
+    var window: NSWindow!
+    var timer: Timer?
+    var elapsedTime: Int = 0
+    var isHidden: Bool = false
+    var globalEventMonitor: Any?
+    
+    // AI Integration Properties - loaded from .env file
+    private var openAIAPIKey: String = ""
+    private var openAIModel: String = "gpt-4o"
+    private var maxTokens: Int = 150
+    private var temperature: Double = 0.7
+    private var ocrInterval: Double = 3.0
+    private var minTextLength: Int = 20
+    
+    // Debug mode
+    private let debugMode: Bool = false // Set to false for production
+    
+    private var lastScreenText: String = ""
+    private var isProcessingAI: Bool = false
+    private var currentAITask: Task<Void, Never>? // Track current AI request for cancellation
+    
+    // AI Response UI Components
+    private var responseContainer: NSView!
+    private var responseTextView: NSTextView!
+    private var isResponseVisible: Bool = false
+    
+    // Dynamic sizing properties
+    private let minResponseHeight: CGFloat = 100
+    private let maxResponseHeight: CGFloat = 400
+    private let responseTextPadding: CGFloat = 36 // 18 top + 18 bottom
+    
+    // Audio capture properties - now connects to Electron companion
+    private var electronWebSocket: URLSessionWebSocketTask?
+    private var urlSession: URLSession?
+    private var isListening: Bool = false
+    private var lastTranscribedText: String = ""
+    private var lastCoachingAdvice: String = ""
+    
+    // Interview coaching state
+    private var interviewMode: Bool = false
+    private var conversationHistory: [String] = []
+    
+    func applicationDidFinishLaunching(_ aNotification: Notification) {
+        print("🚀 Launching Cluely UI Replica with AI...")
+        
+        // Load configuration from .env file
+        loadEnvironmentConfiguration()
+        
+        createCluelyInterface()
+        applyScreenshotHiding()
+        setupGlobalHotkey()
+        startTimer()
+        
+        // Connect to Electron Audio Companion for interview coaching
+        connectToElectronCompanion()
+        
+        // Only show AI status if API key is configured
+        if !openAIAPIKey.isEmpty {
+            print("✅ Cluely interface ready with GPT-4o streaming!")
+            print("🎓 Interview coaching via Electron Audio Companion")
+            print("🎤 Press microphone button for real-time interview advice")
+        } else {
+            print("⚠️  Cluely interface ready (AI disabled - no API key)")
+            print("💡 Create .env file with OPENAI_API_KEY to enable AI features")
+        }
+        
+        print("⌨️  Press Cmd+Shift+\\ to show/hide interface")
+        print("📱 White background AI responses for better visibility")
+        
+        // Note: Audio capture now handled by Electron Audio Companion
+        print("🎤 Audio capture delegated to Electron Audio Companion")
+    }
+    
+    private func loadEnvironmentConfiguration() {
+        // Try to load .env file from current directory
+        let envPath = FileManager.default.currentDirectoryPath + "/.env"
+        
+        guard let envContent = try? String(contentsOfFile: envPath, encoding: .utf8) else {
+            print("⚠️  No .env file found. Copy env_example.txt to .env and configure your API key.")
+            return
+        }
+        
+        // Parse .env file
+        let lines = envContent.components(separatedBy: .newlines)
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") {
+                continue // Skip empty lines and comments
+            }
+            
+            let parts = trimmed.components(separatedBy: "=")
+            guard parts.count >= 2 else { continue }
+            
+            let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = parts[1...].joined(separator: "=").trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            switch key {
+            case "OPENAI_API_KEY":
+                openAIAPIKey = value
+                print("🔑 OpenAI API key loaded from .env")
+            case "OPENAI_MODEL":
+                openAIModel = value
+            case "OPENAI_MAX_TOKENS":
+                maxTokens = Int(value) ?? 150
+            case "OPENAI_TEMPERATURE":
+                temperature = Double(value) ?? 0.7
+            case "OCR_INTERVAL_SECONDS":
+                ocrInterval = Double(value) ?? 3.0
+            case "OCR_MIN_TEXT_LENGTH":
+                minTextLength = Int(value) ?? 20
+            default:
+                break
+            }
+        }
+    }
+    
+    private func createCluelyInterface() {
+        // Create horizontal floating bar (adjusted size for interview coaching button)
+        window = NSWindow(
+            contentRect: NSMakeRect(100, 100, 480, 50),
+            styleMask: [.borderless], // No title bar like Cluely
+            backing: .buffered,
+            defer: false
+        )
+        
+        // Cluely's window properties - TRULY GLOBAL
+        window.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.maximumWindow)) + 1)  // Above everything
+        window.backgroundColor = NSColor.clear
+        window.isOpaque = false
+        window.hasShadow = true
+        window.ignoresMouseEvents = false
+        
+        // CRITICAL: Make window appear on ALL spaces and apps
+        window.collectionBehavior = [
+            .canJoinAllSpaces,           // Appears on all spaces/desktops
+            .stationary,                 // Stays in same position across spaces
+            .ignoresCycle                // Doesn't appear in Cmd+Tab
+        ]
+        
+        // Create main container with dark rounded background
+        let containerView = createMainContainer()
+        window.contentView = containerView
+        
+        // Position window (top-center like Cluely)
+        if let screen = NSScreen.main {
+            let screenFrame = screen.visibleFrame
+            let windowFrame = window.frame
+            let x = (screenFrame.width - windowFrame.width) / 2
+            let y = screenFrame.maxY - windowFrame.height - 20
+            window.setFrameOrigin(NSPoint(x: x, y: y))
+        }
+        
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        
+        print("🌍 Window configured for ALL spaces and applications")
+    }
+    
+    private func createMainContainer() -> NSView {
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 50))
+        container.wantsLayer = true
+        
+        // Modern glassmorphism background with subtle blur effect
+        container.layer?.backgroundColor = NSColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 0.85).cgColor
+        container.layer?.cornerRadius = 12
+        container.layer?.borderWidth = 0.5
+        container.layer?.borderColor = NSColor(white: 1.0, alpha: 0.15).cgColor
+        
+        // Modern shadow with multiple layers for depth
+        container.layer?.shadowOpacity = 0.25
+        container.layer?.shadowOffset = CGSize(width: 0, height: 4)
+        container.layer?.shadowRadius = 12
+        container.layer?.shadowColor = NSColor.black.cgColor
+        
+        // Add all UI elements in Cluely's order with improved spacing
+        addChatButton(to: container)
+        addStartOverButton(to: container)
+        addShowHideButton(to: container)
+        addTimerDisplay(to: container)
+        addMicrophoneButton(to: container)
+        addMoreOptionsButton(to: container)
+        
+        // Add AI response container (initially hidden)
+        createAIResponseContainer(in: container)
+        
+        return container
+    }
+    
+    private func createAIResponseContainer(in container: NSView) {
+        // Put response ABOVE main bar with modern positioning
+        responseContainer = NSView(frame: NSRect(x: 8, y: 52, width: 464, height: 120))
+        responseContainer.wantsLayer = true
+        responseContainer.isHidden = true
+        
+        // Modern glassmorphism with enhanced blur effect
+        responseContainer.layer?.backgroundColor = NSColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 0.85).cgColor
+        responseContainer.layer?.cornerRadius = 12
+        responseContainer.layer?.borderWidth = 0.5
+        responseContainer.layer?.borderColor = NSColor(white: 1.0, alpha: 0.15).cgColor
+        
+        // Enhanced shadow for modern depth
+        responseContainer.layer?.shadowOpacity = 0.4
+        responseContainer.layer?.shadowOffset = CGSize(width: 0, height: 6)
+        responseContainer.layer?.shadowRadius = 20
+        responseContainer.layer?.shadowColor = NSColor.black.cgColor
+        
+        // AI Response header with modern typography
+        let headerLabel = NSTextField(frame: NSRect(x: 18, y: 92, width: 200, height: 20))
+        headerLabel.stringValue = "🤖 AI Response"
+        headerLabel.isEditable = false
+        headerLabel.isBordered = false
+        headerLabel.drawsBackground = false
+        headerLabel.textColor = NSColor(red: 0.4, green: 0.8, blue: 1.0, alpha: 1.0)
+        headerLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        responseContainer.addSubview(headerLabel)
+        
+        // FIXED: Create scroll view to properly handle long content
+        let scrollView = NSScrollView(frame: NSRect(x: 18, y: 18, width: 428, height: 68))
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.borderType = .noBorder
+        scrollView.drawsBackground = false
+        
+        // Response text view with modern styling
+        responseTextView = NSTextView(frame: NSRect(x: 0, y: 0, width: 428, height: 68))
+        responseTextView.string = "Loading AI response..."
+        responseTextView.isEditable = false
+        responseTextView.isSelectable = true
+        responseTextView.drawsBackground = false
+        responseTextView.textColor = NSColor(white: 0.95, alpha: 1.0)
+        responseTextView.font = NSFont.systemFont(ofSize: 14, weight: .regular)
+        responseTextView.isAutomaticQuoteSubstitutionEnabled = false
+        responseTextView.isRichText = true
+        responseTextView.wantsLayer = true
+        
+        // FIXED: Better text container settings for scrolling content
+        responseTextView.textContainer?.lineFragmentPadding = 8
+        responseTextView.textContainer?.widthTracksTextView = true
+        responseTextView.textContainer?.heightTracksTextView = false
+        responseTextView.textContainer?.containerSize = NSSize(width: 428, height: CGFloat.greatestFiniteMagnitude)
+        
+        // Modern inner border with subtle glow on scroll view
+        scrollView.wantsLayer = true
+        scrollView.layer?.borderWidth = 0.5
+        scrollView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+        scrollView.layer?.cornerRadius = 8
+        scrollView.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.03).cgColor
+        
+        // Add subtle inner shadow for depth
+        scrollView.layer?.shadowOpacity = 0.2
+        scrollView.layer?.shadowOffset = CGSize(width: 0, height: 1)
+        scrollView.layer?.shadowRadius = 3
+        scrollView.layer?.shadowColor = NSColor.black.cgColor
+        
+        // FIXED: Properly set up the scroll view with text view
+        scrollView.documentView = responseTextView
+        responseContainer.addSubview(scrollView)
+        
+        // Modern copy button
+        let copyButton = NSButton(frame: NSRect(x: 370, y: 92, width: 70, height: 20))
+        copyButton.title = "📋 Copy"
+        copyButton.bezelStyle = .rounded
+        copyButton.controlSize = .small
+        copyButton.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        copyButton.contentTintColor = NSColor(white: 0.9, alpha: 1.0)
+        copyButton.wantsLayer = true
+        
+        // Glass-like button effect
+        copyButton.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+        copyButton.layer?.cornerRadius = 6
+        copyButton.layer?.borderWidth = 0.5
+        copyButton.layer?.borderColor = NSColor(white: 1.0, alpha: 0.15).cgColor
+        copyButton.layer?.shadowOpacity = 0.1
+        copyButton.layer?.shadowOffset = CGSize(width: 0, height: 1)
+        copyButton.layer?.shadowRadius = 2
+        
+        copyButton.target = self
+        copyButton.action = #selector(copyResponseClicked)
+        responseContainer.addSubview(copyButton)
+        
+        container.addSubview(responseContainer, positioned: .above, relativeTo: nil)
+        
+        // Debug mode: Force container to be visible for testing
+        if debugMode {
+            print("🐛 DEBUG MODE: Forcing response container to be visible")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                let debugText = "🐛 DEBUG: This is test text to verify visibility and dynamic resizing functionality. This text should make the container grow to accommodate the longer content automatically."
+                self.responseContainer.isHidden = false
+                
+                let formattedDebugText = self.formatAIResponseText(debugText)
+                self.responseTextView.textStorage?.setAttributedString(formattedDebugText)
+                
+                // Calculate and apply dynamic height for debug text
+                let requiredHeight = self.calculateRequiredHeight(for: debugText)
+                self.resizeResponseContainer(to: requiredHeight)
+                
+                // Force all layout updates
+                self.responseContainer.needsLayout = true
+                self.responseContainer.needsDisplay = true
+                self.responseTextView.layoutManager?.ensureLayout(for: self.responseTextView.textContainer!)
+                self.responseTextView.needsDisplay = true
+                
+                self.isResponseVisible = true
+                
+                print("🐛 DEBUG: Response container should now be visible with dynamic height: \(requiredHeight)")
+            }
+        }
+    }
+    
+    private func addChatButton(to container: NSView) {
+        let button = NSButton(frame: NSRect(x: 15, y: 13, width: 55, height: 24))
+        button.title = "💬 Chat"
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        button.wantsLayer = true
+        
+        // Modern gradient background
+        let gradient = CAGradientLayer()
+        gradient.frame = button.bounds
+        gradient.colors = [
+            NSColor(red: 0.1, green: 0.6, blue: 1.0, alpha: 1.0).cgColor,
+            NSColor(red: 0.0, green: 0.45, blue: 0.9, alpha: 1.0).cgColor
+        ]
+        gradient.startPoint = CGPoint(x: 0, y: 0)
+        gradient.endPoint = CGPoint(x: 0, y: 1)
+        gradient.cornerRadius = 8
+        
+        button.layer?.insertSublayer(gradient, at: 0)
+        button.layer?.cornerRadius = 8
+        button.layer?.shadowOpacity = 0.3
+        button.layer?.shadowOffset = CGSize(width: 0, height: 2)
+        button.layer?.shadowRadius = 4
+        button.layer?.shadowColor = NSColor(red: 0.0, green: 0.45, blue: 0.9, alpha: 1.0).cgColor
+        
+        button.contentTintColor = .white
+        button.target = self
+        button.action = #selector(chatClicked)
+        container.addSubview(button)
+    }
+    
+    private func addStartOverButton(to container: NSView) {
+        let button = NSButton(frame: NSRect(x: 80, y: 13, width: 75, height: 24))
+        button.title = "↻ Start Over"
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        button.contentTintColor = NSColor(white: 0.95, alpha: 1.0)
+        button.wantsLayer = true
+        
+        // Modern glass-like button background
+        button.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+        button.layer?.cornerRadius = 6
+        button.layer?.borderWidth = 0.5
+        button.layer?.borderColor = NSColor(white: 1.0, alpha: 0.12).cgColor
+        
+        // Subtle shadow for depth
+        button.layer?.shadowOpacity = 0.15
+        button.layer?.shadowOffset = CGSize(width: 0, height: 1)
+        button.layer?.shadowRadius = 2
+        button.layer?.shadowColor = NSColor.black.cgColor
+        
+        button.target = self
+        button.action = #selector(startOverClicked)
+        container.addSubview(button)
+    }
+    
+    private func addShowHideButton(to container: NSView) {
+        let button = NSButton(frame: NSRect(x: 165, y: 13, width: 75, height: 24))
+        button.title = "👁 Show/Hide"
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        button.contentTintColor = NSColor(white: 0.95, alpha: 1.0)
+        button.wantsLayer = true
+        
+        // Modern glass-like button background
+        button.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+        button.layer?.cornerRadius = 6
+        button.layer?.borderWidth = 0.5
+        button.layer?.borderColor = NSColor(white: 1.0, alpha: 0.12).cgColor
+        
+        // Subtle shadow for depth
+        button.layer?.shadowOpacity = 0.15
+        button.layer?.shadowOffset = CGSize(width: 0, height: 1)
+        button.layer?.shadowRadius = 2
+        button.layer?.shadowColor = NSColor.black.cgColor
+        
+        button.target = self
+        button.action = #selector(showHideClicked)
+        container.addSubview(button)
+    }
+    
+    private func addTimerDisplay(to container: NSView) {
+        let timerLabel = NSTextField(frame: NSRect(x: 250, y: 17, width: 50, height: 16))
+        timerLabel.stringValue = "00:00"
+        timerLabel.isEditable = false
+        timerLabel.isBordered = false
+        timerLabel.drawsBackground = false
+        timerLabel.textColor = NSColor(white: 0.9, alpha: 1.0)
+        timerLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        timerLabel.alignment = .center
+        timerLabel.identifier = NSUserInterfaceItemIdentifier("timer")
+        
+        // Add subtle background for timer
+        timerLabel.wantsLayer = true
+        timerLabel.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.05).cgColor
+        timerLabel.layer?.cornerRadius = 4
+        
+        container.addSubview(timerLabel)
+    }
+    
+    private func addMicrophoneButton(to container: NSView) {
+        let button = NSButton(frame: NSRect(x: 310, y: 13, width: 60, height: 24))
+        button.title = "🎤 Coach"
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = NSFont.systemFont(ofSize: 9, weight: .medium)
+        button.contentTintColor = NSColor(white: 0.95, alpha: 1.0)
+        button.wantsLayer = true
+        
+        // Modern glass-like button background
+        button.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+        button.layer?.cornerRadius = 6
+        button.layer?.borderWidth = 0.5
+        button.layer?.borderColor = NSColor(white: 1.0, alpha: 0.12).cgColor
+        
+        // Subtle shadow for depth
+        button.layer?.shadowOpacity = 0.15
+        button.layer?.shadowOffset = CGSize(width: 0, height: 1)
+        button.layer?.shadowRadius = 2
+        button.layer?.shadowColor = NSColor.black.cgColor
+        
+        button.target = self
+        button.action = #selector(microphoneClicked)
+        container.addSubview(button)
+    }
+    
+    private func addMoreOptionsButton(to container: NSView) {
+        let button = NSButton(frame: NSRect(x: 380, y: 13, width: 30, height: 24))
+        button.title = "⋯"
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        button.contentTintColor = NSColor(white: 0.95, alpha: 1.0)
+        button.wantsLayer = true
+        
+        // Modern glass-like button background
+        button.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+        button.layer?.cornerRadius = 6
+        button.layer?.borderWidth = 0.5
+        button.layer?.borderColor = NSColor(white: 1.0, alpha: 0.12).cgColor
+        
+        // Subtle shadow for depth
+        button.layer?.shadowOpacity = 0.15
+        button.layer?.shadowOffset = CGSize(width: 0, height: 1)
+        button.layer?.shadowRadius = 2
+        button.layer?.shadowColor = NSColor.black.cgColor
+        
+        button.target = self
+        button.action = #selector(moreOptionsClicked)
+        container.addSubview(button)
+    }
+    
+    private func applyScreenshotHiding() {
+        // THE CORE FEATURE: Hide from screenshots
+        window.sharingType = .none
+        print("🔒 Screenshot hiding applied (same as original Cluely)")
+    }
+    
+    private func startTimer() {
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            self.elapsedTime += 1
+            self.updateTimerDisplay()
+        }
+    }
+    
+    private func updateTimerDisplay() {
+        let minutes = elapsedTime / 60
+        let seconds = elapsedTime % 60
+        let timeString = String(format: "%02d:%02d", minutes, seconds)
+        
+        if let timerField = window.contentView?.viewWithTag(0)?.subviews.first(where: { 
+            $0.identifier?.rawValue == "timer" 
+        }) as? NSTextField {
+            timerField.stringValue = timeString
+        }
+    }
+    
+    private func setupGlobalHotkey() {
+        // Monitor for global hotkeys
+        globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            // Cmd+Shift+\ for show/hide
+            if event.modifierFlags.contains([.command, .shift]) && event.keyCode == 42 {
+                print("⌨️  Cmd+Shift+\\ detected (global) - toggling interface")
+                self.toggleInterface()
+            }
+            // Cmd+Enter for AI analysis
+            else if event.modifierFlags.contains(.command) && event.keyCode == 36 && !event.modifierFlags.contains(.shift) {
+                print("🤖 Cmd+Enter detected (global) - triggering AI analysis")
+                Task {
+                    await self.performManualAIAnalysis()
+                }
+            }
+            // Cmd + Arrow Keys for window movement
+            else if event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
+                _ = self.handleWindowMovement(keyCode: event.keyCode)
+            }
+        }
+        
+        // Also monitor local events (when our app has focus)
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.modifierFlags.contains([.command, .shift]) && event.keyCode == 42 {
+                print("⌨️  Cmd+Shift+\\ detected (local) - toggling interface")
+                self.toggleInterface()
+                return nil // Consume the event
+            }
+            // Cmd+Enter for AI analysis (local)
+            else if event.modifierFlags.contains(.command) && event.keyCode == 36 && !event.modifierFlags.contains(.shift) {
+                print("🤖 Cmd+Enter detected (local) - triggering AI analysis")
+                Task {
+                    await self.performManualAIAnalysis()
+                }
+                return nil // Consume the event
+            }
+            // Handle window movement locally too
+            else if event.modifierFlags.contains(.command) && !event.modifierFlags.contains(.shift) {
+                if self.handleWindowMovement(keyCode: event.keyCode) {
+                    return nil // Consume the event if we handled it
+                }
+            }
+            return event
+        }
+        
+        print("🎹 Global hotkeys registered:")
+        print("   • Cmd+Shift+\\ - Show/Hide interface")
+        print("   • Cmd+Enter - Real-time AI streaming analysis")
+        print("   • Cmd+Arrow Keys - Move window")
+    }
+    
+    private func handleWindowMovement(keyCode: UInt16) -> Bool {
+        let moveDistance: CGFloat = 30 // Pixels to move per key press
+        var newOrigin = window.frame.origin
+        var didMove = false
+        
+        switch keyCode {
+        case 126: // Up Arrow
+            newOrigin.y += moveDistance
+            didMove = true
+            print("⬆️  Moving window up")
+        case 125: // Down Arrow
+            newOrigin.y -= moveDistance
+            didMove = true
+            print("⬇️  Moving window down")
+        case 123: // Left Arrow
+            newOrigin.x -= moveDistance
+            didMove = true
+            print("⬅️  Moving window left")
+        case 124: // Right Arrow
+            newOrigin.x += moveDistance
+            didMove = true
+            print("➡️  Moving window right")
+        default:
+            return false // Not an arrow key we handle
+        }
+        
+        if didMove {
+            // Ensure window stays within screen bounds
+            if let screen = NSScreen.main {
+                let screenFrame = screen.visibleFrame
+                let windowFrame = window.frame
+                
+                // Keep window within screen bounds
+                newOrigin.x = max(screenFrame.minX, min(newOrigin.x, screenFrame.maxX - windowFrame.width))
+                newOrigin.y = max(screenFrame.minY, min(newOrigin.y, screenFrame.maxY - windowFrame.height))
+            }
+            
+            // Animate the movement for smooth repositioning
+            window.setFrameOrigin(newOrigin)
+        }
+        
+        return didMove
+    }
+    
+    private func toggleInterface() {
+        DispatchQueue.main.async {
+            self.isHidden = !self.isHidden
+            
+            if self.isHidden {
+                // Hide using transparency instead of orderOut to keep process alive
+                self.window.alphaValue = 0.0
+                self.window.ignoresMouseEvents = true
+                print("👻 Interface hidden (process stays alive)")
+            } else {
+                // Show the window and bring to front
+                self.window.alphaValue = 1.0
+                self.window.ignoresMouseEvents = false
+                self.window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                print("👁  Interface shown")
+            }
+        }
+    }
+    
+    // MARK: - Button Actions (Cluely functionality)
+    
+    @objc private func chatClicked() {
+        print("💬 Chat clicked - Real-time AI streaming analysis triggered")
+        Task {
+            await performManualAIAnalysis()
+        }
+    }
+    
+    @objc private func startOverClicked() {
+        print("↻ Start Over clicked - resetting interview coaching session")
+        
+        // FIXED: Don't stop listening if it's currently active - just reset state
+        let wasListening = isListening
+        
+        // Cancel any ongoing AI request
+        if let task = currentAITask {
+            task.cancel()
+            currentAITask = nil
+            print("🛑 Cancelled ongoing AI request")
+        }
+        
+        // Reset interview coaching state
+        interviewMode = false
+        conversationHistory.removeAll()
+        lastTranscribedText = ""
+        lastCoachingAdvice = ""
+        isProcessingAI = false
+        
+        // Hide AI response if visible
+        if isResponseVisible {
+            hideAIResponse()
+        }
+        
+        // Reset timer
+        elapsedTime = 0
+        updateTimerDisplay()
+        
+        // Clear any previous screen text
+        lastScreenText = ""
+        
+        // FIXED: If was listening, restart immediately instead of stopping
+        if wasListening {
+            print("🔄 Restarting interview coaching after reset...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.startInterviewCoaching()
+            }
+        }
+        
+        print("✅ Interview coaching session reset - \(wasListening ? "restarting" : "ready for new interview")")
+    }
+    
+    @objc private func showHideClicked() {
+        print("👁 Show/Hide clicked")
+        toggleInterface()
+    }
+    
+    @objc private func microphoneClicked() {
+        print("🎤 Microphone clicked - toggling interview coaching mode")
+        
+                if isListening {
+            // Stop interview coaching
+            stopInterviewCoaching()
+                } else {
+            // Start interview coaching
+            startInterviewCoaching()
+        }
+    }
+    
+    @objc private func moreOptionsClicked() {
+        print("⋯ More Options clicked")
+        showAlert("More Options", "This would show additional Cluely features")
+    }
+    
+    private func showAlert(_ title: String, _ message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+    
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // Don't terminate when window is closed - stay running in background
+        return false
+    }
+    
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Only allow termination on explicit quit (Cmd+Q)
+        print("🛑 Application terminating...")
+        
+        // Clean up timer
+        timer?.invalidate()
+        
+        // Clean up global event monitor
+        if let monitor = globalEventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        
+        return .terminateNow
+    }
+    
+    @MainActor
+    private func performScreenOCR() async {
+        guard !isProcessingAI else { return }
+        
+        do {
+            // Capture screen content
+            let displays = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard let display = displays.displays.first else {
+                print("❌ No display found for OCR")
+                return
+            }
+            
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let configuration = SCStreamConfiguration()
+            configuration.width = Int(display.width)
+            configuration.height = Int(display.height)
+            configuration.pixelFormat = kCVPixelFormatType_32BGRA
+            
+            // Capture single frame
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            
+            // Perform OCR using Vision framework
+            let requestHandler = VNImageRequestHandler(cgImage: image)
+            let request = VNRecognizeTextRequest { request, error in
+                Task { @MainActor in
+                    await self.processOCRResults(request: request, error: error)
+                }
+            }
+            
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            
+            try requestHandler.perform([request])
+            
+        } catch {
+            print("❌ OCR Error: \(error.localizedDescription)")
+        }
+    }
+    
+    @MainActor
+    private func processOCRResults(request: VNRequest, error: Error?) async {
+        guard let observations = request.results as? [VNRecognizedTextObservation] else {
+            if let error = error {
+                print("❌ OCR failed: \(error.localizedDescription)")
+            } else {
+                print("❌ No text detected on screen")
+            }
+            return
+        }
+        
+        var detectedText = ""
+        for observation in observations {
+            guard let topCandidate = observation.topCandidates(1).first else { continue }
+            detectedText += topCandidate.string + " "
+        }
+        
+        let cleanText = detectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // ✅ FIX: Save screen text for combined audio + screen analysis
+        lastScreenText = cleanText
+        
+        if cleanText.count > minTextLength {
+            print("📖 Screen text detected: \(cleanText.prefix(100))...")
+            // Always analyze text since this is now manual-only
+            await analyzeWithGPT4o(screenText: cleanText)
+        } else {
+            print("❌ Not enough text found on screen (minimum: \(minTextLength) characters)")
+        }
+    }
+    
+    private func analyzeWithGPT4o(screenText: String) async {
+        guard !isProcessingAI else { return }
+        
+        // Check if task was cancelled before starting
+        guard !Task.isCancelled else { 
+            print("🛑 AI analysis cancelled before starting")
+            return 
+        }
+        
+        isProcessingAI = true
+        defer { 
+            isProcessingAI = false
+            currentAITask = nil // Clean up task reference
+        }
+        
+        print("🤖 Analyzing with GPT-4o (streaming)...")
+        
+        // Show response container immediately
+        await MainActor.run {
+            self.showAIResponseContainer()
+        }
+        
+        let prompt = """
+        You are an AI assistant helping with interview questions. Based on the screen content below, provide a helpful, concise response.
+        
+        Screen Content:
+        \(screenText)
+        
+        Provide a brief, helpful response (max 3 sentences):
+        """
+        
+        do {
+            // Check cancellation before API call
+            try Task.checkCancellation()
+            
+            let response = try await callOpenAIAPI(prompt: prompt)
+            
+            // Check cancellation after API call
+            try Task.checkCancellation()
+            
+            print("✅ Streaming completed: \(response.prefix(100))...")
+            
+            // Response stays visible until manually dismissed via Start Over
+        } catch is CancellationError {
+            print("🛑 AI analysis was cancelled")
+            await MainActor.run {
+                self.hideAIResponse()
+            }
+        } catch {
+            print("❌ OpenAI API Error: \(error.localizedDescription)")
+            await MainActor.run {
+                let errorText = "❌ Error: \(error.localizedDescription)"
+                let formattedErrorText = self.formatAIResponseText(errorText)
+                self.responseTextView.textStorage?.setAttributedString(formattedErrorText)
+                
+                // Force NSTextView layout update
+                self.responseTextView.layoutManager?.ensureLayout(for: self.responseTextView.textContainer!)
+                self.responseTextView.needsDisplay = true
+            }
+            
+            // Error message also stays visible until manually dismissed
+        }
+    }
+    
+    private func callOpenAIAPI(prompt: String) async throws -> String {
+        guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
+            throw URLError(.badURL)
+        }
+        
+        let requestBody = [
+            "model": openAIModel,
+            "messages": [
+                [
+                    "role": "user",
+                    "content": prompt
+                ]
+            ],
+            "max_tokens": maxTokens,
+            "temperature": temperature,
+            "stream": true // Enable streaming
+        ] as [String: Any]
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        
+        let (asyncBytes, response) = try await URLSession.shared.bytes(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        
+        var fullResponse = ""
+        
+        // Process streaming response
+        for try await line in asyncBytes.lines {
+            // Check if request was cancelled
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+            
+            if line.hasPrefix("data: ") {
+                let jsonString = String(line.dropFirst(6)) // Remove "data: " prefix
+                
+                if jsonString == "[DONE]" {
+                    break
+                }
+                
+                guard let data = jsonString.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let choices = json["choices"] as? [[String: Any]],
+                      let delta = choices.first?["delta"] as? [String: Any],
+                      let content = delta["content"] as? String else {
+                    continue
+                }
+                
+                fullResponse += content
+                
+                // Update UI in real-time with streaming text
+                let currentResponse = fullResponse // Local copy to avoid concurrency issues
+                await MainActor.run {
+                    print("📝 Updating UI with text: \(currentResponse.suffix(50))...") // Debug log
+                    
+                    // Apply beautiful formatting to the text
+                    let formattedText = self.formatAIResponseText(currentResponse)
+                    self.responseTextView.textStorage?.setAttributedString(formattedText)
+                    
+                    // Force NSTextView layout update
+                    self.responseTextView.layoutManager?.ensureLayout(for: self.responseTextView.textContainer!)
+                    self.responseTextView.needsDisplay = true // Force redraw
+                    
+                    // Dynamic resizing: Calculate and apply new height based on content
+                    let requiredHeight = self.calculateRequiredHeight(for: currentResponse)
+                    self.resizeResponseContainer(to: requiredHeight)
+                }
+            }
+        }
+        
+        return fullResponse.isEmpty ? "No response generated" : fullResponse
+    }
+    
+    private func showAIResponseContainer() {
+        // Ensure window is fully visible
+        window.alphaValue = 1.0
+        
+        // Force container to be visible and on top
+        responseContainer.isHidden = false
+        
+        // Fix #1: Force container to stay on top with explicit positioning
+        responseContainer.superview?.addSubview(responseContainer, positioned: .above, relativeTo: nil)
+        responseContainer.layer?.zPosition = 999
+        
+        // Set initial text and calculate required height
+        let initialText = "🔍 Connecting to GPT-4o... Please wait..."
+        let formattedInitialText = formatAIResponseText(initialText)
+        responseTextView.textStorage?.setAttributedString(formattedInitialText)
+        
+        // Calculate and apply dynamic height
+        let requiredHeight = calculateRequiredHeight(for: initialText)
+        resizeResponseContainer(to: requiredHeight)
+        
+        // Force layout and display updates for ALL relevant views
+        responseContainer.needsLayout = true
+        responseContainer.needsDisplay = true
+        responseContainer.superview?.needsLayout = true
+        responseContainer.superview?.needsDisplay = true
+        window.contentView?.needsLayout = true
+        window.contentView?.needsDisplay = true
+        window.displayIfNeeded()
+        
+        // Force NSTextView layout update
+        responseTextView.layoutManager?.ensureLayout(for: responseTextView.textContainer!)
+        responseTextView.needsDisplay = true
+        
+        print("🖼️ Response container shown with dynamic sizing: height = \(requiredHeight)")
+        print("📏 responseContainer frame: \(responseContainer.frame)")
+        print("📏 responseTextView frame: \(responseTextView.frame)")
+        print("📏 window frame: \(window.frame)")
+        
+        isResponseVisible = true
+    }
+    
+    private func hideAIResponse() {
+        guard isResponseVisible else { return }
+        
+        // Animate window back to original size
+        let currentFrame = window.frame
+        let originalHeight: CGFloat = 50
+        let newFrame = NSRect(x: currentFrame.origin.x,
+                             y: currentFrame.origin.y + (currentFrame.height - originalHeight), // Move back down
+                             width: currentFrame.width,
+                             height: originalHeight)
+        
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.3
+            context.allowsImplicitAnimation = true
+            window.animator().setFrame(newFrame, display: true)
+        } completionHandler: {
+            self.responseContainer.isHidden = true
+        }
+        
+        isResponseVisible = false
+        responseTextView.string = ""
+    }
+    
+    @objc private func copyResponseClicked() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(responseTextView.string, forType: .string)
+        print("📋 Response copied to clipboard")
+        
+        // Visual feedback - briefly change copy button text
+        if let copyButton = responseContainer.subviews.first(where: { ($0 as? NSButton)?.title.contains("Copy") == true }) as? NSButton {
+            let originalTitle = copyButton.title
+            copyButton.title = "✅ Copied!"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                copyButton.title = originalTitle
+            }
+        }
+    }
+    
+    private func calculateRequiredHeight(for text: String) -> CGFloat {
+        // Create a temporary text view with the same settings as the real one
+        let tempTextView = NSTextView(frame: NSRect(x: 0, y: 0, width: 428, height: 0)) // FIXED: Match exact width
+        
+        // Apply the same formatting as the real text view
+        let formattedText = formatAIResponseText(text)
+        tempTextView.textStorage?.setAttributedString(formattedText)
+        
+        // Match the real text view settings exactly
+        tempTextView.isEditable = false
+        tempTextView.isSelectable = true // FIXED: Enable selection for better height calculation
+        tempTextView.textContainer?.lineFragmentPadding = 8
+        tempTextView.textContainer?.widthTracksTextView = true
+        tempTextView.textContainer?.heightTracksTextView = false
+        tempTextView.textContainer?.containerSize = NSSize(width: 428, height: CGFloat.greatestFiniteMagnitude)
+        
+        // Force layout to calculate required size
+        tempTextView.layoutManager?.ensureLayout(for: tempTextView.textContainer!)
+        let textBounds = tempTextView.layoutManager?.usedRect(for: tempTextView.textContainer!) ?? .zero
+        
+        // IMPROVED: Better calculation for code blocks and formatted content
+        let codeBlockCount = text.components(separatedBy: "```").count - 1
+        let lineCount = text.components(separatedBy: .newlines).count
+        
+        // FIXED: More accurate calculation based on actual content
+        let codeBlockExtra: CGFloat = CGFloat(codeBlockCount / 2) * 30 // More space per code block
+        let lineExtra: CGFloat = CGFloat(max(0, lineCount - 5)) * 8 // More space for long content
+        
+        // FIXED: Use actual text bounds with better padding
+        let actualTextHeight = textBounds.height
+        let textHeight = max(actualTextHeight + codeBlockExtra + lineExtra + 40, 50) // More accurate base padding
+        let totalHeight = textHeight + responseTextPadding + 60 // More header/button space
+        
+        // IMPROVED: Dynamic maximum based on content type
+        let hasCodeBlocks = codeBlockCount > 0
+        let maxHeight: CGFloat = hasCodeBlocks ? 600 : 400 // Higher max for code
+        let finalHeight = max(minResponseHeight, min(maxHeight, totalHeight))
+        
+        print("📏 ENHANCED Height calculation: actualText=\(actualTextHeight), total=\(textHeight), lines=\(lineCount), codeBlocks=\(codeBlockCount/2), final=\(finalHeight)")
+        return finalHeight
+    }
+    
+    private func resizeResponseContainer(to height: CGFloat) {
+        let oldFrame = responseContainer.frame
+        let newFrame = NSRect(x: oldFrame.origin.x, 
+                             y: oldFrame.origin.y, 
+                             width: oldFrame.width, 
+                             height: height)
+        
+        // Update container frame
+        responseContainer.frame = newFrame
+        
+        // FIXED: Find and resize the scroll view instead of text view directly
+        for subview in responseContainer.subviews {
+            if let scrollView = subview as? NSScrollView {
+                let scrollViewHeight = height - responseTextPadding - 60 // Match padding in calculation
+                let actualScrollViewHeight = max(scrollViewHeight, 40)
+                scrollView.frame = NSRect(x: 18, y: 18, width: 428, height: actualScrollViewHeight)
+                
+                // Update text view within scroll view to allow proper content sizing
+                if let textView = scrollView.documentView as? NSTextView {
+                    textView.textContainer?.containerSize = NSSize(width: 428, height: CGFloat.greatestFiniteMagnitude)
+                    textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+                }
+                
+                print("📏 SCROLL Fixed: scrollView height=\(actualScrollViewHeight)")
+                break
+            }
+        }
+        
+        // Update header and copy button positions
+        for subview in responseContainer.subviews {
+            if let label = subview as? NSTextField, label.stringValue.contains("AI Response") {
+                label.frame.origin.y = height - 32 // Position header near top
+            } else if let button = subview as? NSButton, button.title.contains("Copy") {
+                button.frame.origin.y = height - 32 // Position copy button near top
+            }
+        }
+        
+        // Resize window to accommodate new response height
+        let currentWindowFrame = window.frame
+        let mainBarHeight: CGFloat = 50
+        let newWindowHeight = mainBarHeight + height + 5 // 5px spacing
+        let newWindowFrame = NSRect(x: currentWindowFrame.origin.x,
+                                   y: currentWindowFrame.origin.y - (newWindowHeight - currentWindowFrame.height),
+                                   width: currentWindowFrame.width,
+                                   height: newWindowHeight)
+        
+        window.setFrame(newWindowFrame, display: true, animate: false)
+        
+        // FIXED: Force comprehensive layout updates
+        responseContainer.needsLayout = true
+        responseContainer.needsDisplay = true
+        responseTextView.needsLayout = true
+        responseTextView.needsDisplay = true
+        
+        // FIXED: Ensure text view container updates
+        responseTextView.textContainer?.containerSize = NSSize(width: 428, height: CGFloat.greatestFiniteMagnitude)
+        responseTextView.layoutManager?.ensureLayout(for: responseTextView.textContainer!)
+        
+        print("📏 ENHANCED Resized: container=\(height), windowHeight=\(newWindowHeight)")
+        
+        // Debug frame information
+        print("📏 responseContainer frame: \(responseContainer.frame)")
+        if let scrollView = responseContainer.subviews.first(where: { $0 is NSScrollView }) {
+            print("📏 scrollView frame: \(scrollView.frame)")
+        }
+        print("📏 responseTextView frame: \(responseTextView.frame)")
+        print("📏 window frame: \(window.frame)")
+    }
+    
+    private func formatAIResponseText(_ text: String) -> NSAttributedString {
+        let attributedString = NSMutableAttributedString(string: text)
+        let fullRange = NSRange(location: 0, length: text.count)
+        
+        // Base text styling
+        let baseFont = NSFont.systemFont(ofSize: 14, weight: .regular)
+        let textColor = NSColor(white: 0.95, alpha: 1.0)
+        
+        attributedString.addAttribute(.font, value: baseFont, range: fullRange)
+        attributedString.addAttribute(.foregroundColor, value: textColor, range: fullRange)
+        
+        // IMPROVED: Better line spacing for readability
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 4
+        paragraphStyle.paragraphSpacing = 8
+        paragraphStyle.lineBreakMode = .byWordWrapping
+        attributedString.addAttribute(.paragraphStyle, value: paragraphStyle, range: fullRange)
+        
+        // FIXED: Format code blocks with monospace font and background
+        let codeBlockPattern = "```[^`]*```"
+        let codeBlockRegex = try? NSRegularExpression(pattern: codeBlockPattern, options: .dotMatchesLineSeparators)
+        let codeBlockMatches = codeBlockRegex?.matches(in: text, options: [], range: fullRange) ?? []
+        
+        for match in codeBlockMatches {
+            let codeFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+            let codeColor = NSColor(red: 0.8, green: 1.0, blue: 0.8, alpha: 1.0) // Light green
+            let codeBackground = NSColor(white: 0.15, alpha: 1.0)
+            
+            attributedString.addAttribute(.font, value: codeFont, range: match.range)
+            attributedString.addAttribute(.foregroundColor, value: codeColor, range: match.range)
+            attributedString.addAttribute(.backgroundColor, value: codeBackground, range: match.range)
+        }
+        
+        // FIXED: Format inline code with backticks
+        let inlineCodePattern = "`[^`]+`"
+        let inlineCodeRegex = try? NSRegularExpression(pattern: inlineCodePattern, options: [])
+        let inlineCodeMatches = inlineCodeRegex?.matches(in: text, options: [], range: fullRange) ?? []
+        
+        for match in inlineCodeMatches {
+            let inlineFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+            let inlineColor = NSColor(red: 0.6, green: 0.9, blue: 1.0, alpha: 1.0) // Light blue
+            let inlineBackground = NSColor(white: 0.1, alpha: 1.0)
+            
+            attributedString.addAttribute(.font, value: inlineFont, range: match.range)
+            attributedString.addAttribute(.foregroundColor, value: inlineColor, range: match.range)
+            attributedString.addAttribute(.backgroundColor, value: inlineBackground, range: match.range)
+        }
+        
+        // IMPROVED: Style headers with ** formatting
+        let headerPattern = "\\*\\*[^*]+\\*\\*"
+        let headerRegex = try? NSRegularExpression(pattern: headerPattern, options: [])
+        let headerMatches = headerRegex?.matches(in: text, options: [], range: fullRange) ?? []
+        
+        for match in headerMatches {
+            let headerFont = NSFont.systemFont(ofSize: 15, weight: .semibold)
+            let headerColor = NSColor(red: 0.4, green: 0.8, blue: 1.0, alpha: 1.0)
+            attributedString.addAttribute(.font, value: headerFont, range: match.range)
+            attributedString.addAttribute(.foregroundColor, value: headerColor, range: match.range)
+        }
+        
+        // Style numbered lists and bullet points (existing code)
+        let lines = text.components(separatedBy: .newlines)
+        var currentLocation = 0
+        
+        for line in lines {
+            let lineRange = NSRange(location: currentLocation, length: line.count)
+            
+            // Style numbered lists (1., 2., etc.)
+            if line.trimmingCharacters(in: .whitespaces).range(of: "^\\d+\\.", options: .regularExpression) != nil {
+                let numberFont = NSFont.systemFont(ofSize: 14, weight: .medium)
+                let numberColor = NSColor(red: 0.6, green: 0.9, blue: 0.6, alpha: 1.0)
+                attributedString.addAttribute(.font, value: numberFont, range: lineRange)
+                attributedString.addAttribute(.foregroundColor, value: numberColor, range: lineRange)
+            }
+            
+            currentLocation += line.count + 1 // +1 for newline character
+        }
+        
+        return attributedString
+    }
+    
+    private func performManualAIAnalysis() async {
+        guard !openAIAPIKey.isEmpty else {
+            print("❌ AI analysis requires OpenAI API key in .env file")
+            return
+        }
+        
+        guard !isProcessingAI else {
+            print("⏳ AI analysis already in progress...")
+            return
+        }
+        
+        print("🔍 Performing manual screen analysis...")
+        
+        // Create cancellable task for AI analysis
+        currentAITask = Task {
+            await performScreenOCR()
+        }
+        
+        await currentAITask?.value
+    }
+    
+    private func connectToElectronCompanion() {
+        print("🔗 Connecting to Electron Audio Companion on port 8765...")
+        
+        guard let url = URL(string: "ws://localhost:8765") else {
+            print("❌ Invalid WebSocket URL")
+            return
+        }
+        
+        urlSession = URLSession(configuration: .default, delegate: self, delegateQueue: OperationQueue())
+        electronWebSocket = urlSession?.webSocketTask(with: url)
+        electronWebSocket?.resume()
+        
+        // Start listening for messages
+        receiveElectronMessage()
+        
+        print("🎤 Electron Audio Companion connection initiated")
+    }
+    
+    private func receiveElectronMessage() {
+        electronWebSocket?.receive { [weak self] result in
+            switch result {
+            case .success(let message):
+                switch message {
+                case .string(let text):
+                    self?.handleElectronMessage(text)
+                case .data(let data):
+                    if let text = String(data: data, encoding: .utf8) {
+                        self?.handleElectronMessage(text)
+                    }
+        @unknown default:
+                    break
+                }
+                // Continue listening
+                self?.receiveElectronMessage()
+                
+            case .failure(let error):
+                print("❌ WebSocket receive error: \(error)")
+                // Try to reconnect after a delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                    self?.connectToElectronCompanion()
+                }
+            }
+        }
+    }
+    
+    private func handleElectronMessage(_ message: String) {
+        guard let data = message.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = json["type"] as? String else {
+            print("📦 Raw message from Electron: \(message)")
+            return
+        }
+        
+        DispatchQueue.main.async {
+            switch type {
+            case "status":
+                print("📊 Electron status: \(json)")
+                
+            case "transcription":
+                if let text = json["text"] as? String {
+                    self.handleTranscription(text)
+                }
+                
+            case "audioCaptureStarted":
+                print("🎤 Audio capture started in Electron")
+                self.isListening = true
+                self.updateMicrophoneButtonState()
+                
+            case "audioCaptureStopped":
+                print("🛑 Audio capture stopped in Electron")
+                self.isListening = false
+                self.updateMicrophoneButtonState()
+                
+            case "audioData":
+                // Visual feedback for audio activity
+                break
+                
+            default:
+                print("❓ Unknown message type from Electron: \(type)")
+            }
+        }
+    }
+    
+    private func sendToElectron(_ message: [String: Any]) {
+        guard let electronWebSocket = electronWebSocket else {
+            print("❌ No WebSocket connection to Electron")
+            return
+        }
+        
+        do {
+            let data = try JSONSerialization.data(withJSONObject: message)
+            let message = URLSessionWebSocketTask.Message.data(data)
+            
+            electronWebSocket.send(message) { error in
+                if let error = error {
+                    print("❌ Error sending to Electron: \(error)")
+                }
+            }
+        } catch {
+            print("❌ Error serializing message: \(error)")
+        }
+    }
+    
+    private func handleTranscription(_ text: String) {
+        print("📝 Transcription received: \(text)")
+        lastTranscribedText = text
+        
+        // Add to conversation history
+        conversationHistory.append(text)
+        
+        // Keep only last 10 exchanges
+        if conversationHistory.count > 10 {
+            conversationHistory = Array(conversationHistory.suffix(10))
+        }
+
+        // FIXED: Immediately analyze transcription with AI like screen analysis
+        Task {
+            await analyzeTranscriptionWithGPT4o(transcription: text)
+        }
+    }
+    
+    // NEW: Real-time transcription analysis (same as screen analysis)
+    private func analyzeTranscriptionWithGPT4o(transcription: String) async {
+        guard !isProcessingAI else { return }
+        
+        // Check if task was cancelled before starting
+        guard !Task.isCancelled else { 
+            print("🛑 Transcription AI analysis cancelled before starting")
+            return 
+        }
+        
+        isProcessingAI = true
+        defer { 
+            isProcessingAI = false
+            currentAITask = nil
+        }
+        
+        print("🤖 Analyzing transcription with GPT-4o (real-time streaming)...")
+        
+        // Show response container immediately (like screen analysis)
+        await MainActor.run {
+            self.showAIResponseContainer()
+        }
+        
+        // FIXED: Interview-focused prompt with proper code formatting
+        var prompt = """
+        You are an expert interview coach. The candidate just said: "\(transcription)"
+        
+        Provide specific interview coaching advice with proper code formatting:
+        
+        **Quick Response**: [Suggest a strong 1-2 sentence response]
+        
+        **Key Points**: [What specific points to mention]
+        
+        **Code Example** (if applicable): 
+        ```language
+        [Provide clean, properly formatted code]
+        ```
+        
+        **Delivery Tips**: [How to sound confident and professional]
+        
+        Keep response under 100 words total. Use proper markdown formatting for code blocks.
+        """
+        
+        // Add screen context if available for technical questions
+        if !lastScreenText.isEmpty && lastScreenText.count > minTextLength {
+            prompt += """
+            
+            Screen shows: \(lastScreenText.prefix(150))...
+            
+            Use this context to give relevant technical interview advice.
+            """
+        }
+        
+        do {
+            // Check cancellation before API call
+            try Task.checkCancellation()
+            
+            let response = try await callOpenAIAPI(prompt: prompt)
+            
+            // Check cancellation after API call
+            try Task.checkCancellation()
+            
+            print("✅ Real-time interview coaching completed: \(response.prefix(100))...")
+            
+        } catch is CancellationError {
+            print("🛑 Transcription AI analysis was cancelled")
+            await MainActor.run {
+                self.hideAIResponse()
+            }
+        } catch {
+            print("❌ Transcription OpenAI API Error: \(error.localizedDescription)")
+            await MainActor.run {
+                let errorText = "❌ Error analyzing transcription: \(error.localizedDescription)"
+                let formattedErrorText = self.formatAIResponseText(errorText)
+                self.responseTextView.textStorage?.setAttributedString(formattedErrorText)
+                
+                // Force NSTextView layout update
+                self.responseTextView.layoutManager?.ensureLayout(for: self.responseTextView.textContainer!)
+                self.responseTextView.needsDisplay = true
+            }
+        }
+    }
+    
+    private func updateResponseText(_ text: String) {
+        let formattedText = formatAIResponseText(text)
+        responseTextView.textStorage?.setAttributedString(formattedText)
+        
+        // Calculate and apply dynamic height
+        let requiredHeight = calculateRequiredHeight(for: text)
+        resizeResponseContainer(to: requiredHeight)
+        
+        // Force layout updates
+        responseTextView.layoutManager?.ensureLayout(for: responseTextView.textContainer!)
+        responseTextView.needsDisplay = true
+    }
+    
+    private func startInterviewCoaching() {
+        print("🎓 Starting interview coaching mode...")
+                    
+        // Check if Electron companion is connected
+        guard electronWebSocket != nil else {
+            print("❌ Electron Audio Companion not connected")
+            showAlert("Connection Error", "Please make sure the Electron Audio Companion is running:\ncd electron-audio-companion && npm start")
+            return
+        }
+        
+        // Enable interview mode
+        interviewMode = true
+        
+        // Send start command to Electron
+        sendToElectron([
+            "type": "startAudioCapture"
+        ])
+        
+        // Show response container with status
+        if !isResponseVisible {
+            showAIResponseContainer()
+        }
+        
+        updateResponseText("🎤 REAL-TIME VOICE ANALYSIS\n\n🗣️ Speak now and get instant AI responses!\n\n✨ The AI will analyze your speech in real-time and provide helpful insights.")
+        
+        print("✅ Real-time voice analysis activated")
+    }
+    
+    private func stopInterviewCoaching() {
+        print("🛑 Stopping interview coaching mode...")
+        
+        // Disable interview mode
+        interviewMode = false
+        
+        // Send stop command to Electron
+        sendToElectron([
+            "type": "stopAudioCapture"
+        ])
+        
+        // Update UI
+        if isResponseVisible {
+            updateResponseText("🛑 Interview coaching stopped.\n\nPress microphone button to start listening again.")
+        }
+        
+        print("✅ Interview coaching mode deactivated")
+    }
+    
+    private func updateMicrophoneButtonState() {
+        // Find microphone button and update its appearance
+        if let containerView = window.contentView {
+            for subview in containerView.subviews {
+                if let button = subview as? NSButton, button.title.contains("🎤") {
+                    if isListening {
+                        button.title = "🔴 Stop" // Red dot when listening
+                        button.layer?.backgroundColor = NSColor(red: 0.8, green: 0.2, blue: 0.2, alpha: 0.3).cgColor
+                    } else {
+                        button.title = "🎤 Coach" // Microphone when not listening
+                        button.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - URLSessionWebSocketDelegate
+
+extension CluelyUIDelegate {
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+        print("✅ Connected to Electron Audio Companion")
+        
+        // Send ping to confirm connection
+        sendToElectron([
+            "type": "ping"
+        ])
+    }
+    
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        print("🔌 Disconnected from Electron Audio Companion")
+                
+        // Try to reconnect after a delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            self.connectToElectronCompanion()
+        }
+    }
+}
+
+// MARK: - Main Application Entry Point
+
+print(String(repeating: "=", count: 60))
+print("🎯 CLUELY UI REPLICA - POLISHED & TRANSPARENT")
+print(String(repeating: "=", count: 60))
+print("📱 Creating polished floating interface...")
+print("🎨 More transparent design matching real Cluely")
+print("🔒 Including screenshot hiding functionality")
+print("")
+
+let app = NSApplication.shared
+let delegate = CluelyUIDelegate()
+app.delegate = delegate
+
+print("🚀 Starting polished Cluely interface...")
+app.run()
+
+print("👋 Cluely UI Replica terminated") 

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cluely Audio Companion</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-align: center;
+            overflow: hidden;
+        }
+        
+        .container {
+            max-width: 300px;
+            margin: 0 auto;
+        }
+        
+        .status {
+            font-size: 18px;
+            margin-bottom: 15px;
+            font-weight: 500;
+        }
+        
+        .permission-status {
+            font-size: 12px;
+            margin-bottom: 20px;
+            opacity: 0.9;
+        }
+        
+        .recording {
+            width: 80px;
+            height: 80px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            transition: all 0.3s ease;
+        }
+        
+        .recording.recording {
+            background: rgba(255, 76, 76, 0.3);
+            border-color: #ff4c4c;
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+        
+        .visualizer {
+            display: flex;
+            justify-content: center;
+            align-items: end;
+            height: 50px;
+            margin: 20px 0;
+            gap: 2px;
+        }
+        
+        .wave-bar {
+            width: 4px;
+            height: 10px;
+            background: #4CAF50;
+            border-radius: 2px;
+            animation: wave 1s infinite ease-in-out;
+        }
+        
+        @keyframes wave {
+            0%, 100% { height: 10px; }
+            50% { height: 30px; }
+        }
+        
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="status" class="status">
+            🎤 Cluely Audio Companion<br>
+            <small>Background service ready</small>
+        </div>
+        
+        <div id="permissionStatus" class="permission-status">
+            Initializing audio capture...
+        </div>
+        
+        <div id="recording" class="recording hidden">
+            🎙️
+        </div>
+        
+        <div id="visualizer" class="visualizer hidden">
+            <!-- Bars will be added dynamically -->
+        </div>
+    </div>
+
+    <script src="renderer-improved.js"></script>
+</body>
+</html> 
