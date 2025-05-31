@@ -131,6 +131,13 @@ Cluely-Interview-Assistant/
 
 ### Common Issues
 
+**"System not responding initially"**
+- If the app doesn't work right away, try this quick fix:
+  1. Click the **🎤 Coach** button to stop recording
+  2. Click **↻ Start Over** button 
+  3. Click **🎤 Coach** again to restart
+- This resets the audio system and usually fixes initialization issues
+
 **"No audio capture"**
 - Grant microphone permissions to Terminal/your IDE
 - Check that Electron companion is running (`npm start`)
