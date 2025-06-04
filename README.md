@@ -16,13 +16,6 @@ I built this as my own take on your interview assistant concept. Figured the bes
 
 ## 🔒 Screenshot Hiding Implementation
 
-### How I Built It
-
-The core feature is making the window invisible to screen capture while keeping it visible to the user. Pretty straightforward implementation:
-
-```swift
-window.sharingType = .none  // Excludes window from screen capture APIs
-```
 
 **What this does:**
 - Invisible to screenshot tools and screen recordings
